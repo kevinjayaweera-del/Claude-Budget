@@ -21,31 +21,38 @@ def scan_and_parse(conn, statements_dir):
         if existing:
             continue
 
-        rows = parse_csv(path) if path.suffix.lower() == ".csv" else parse_pdf(path)
+        try:
+            rows = parse_csv(path) if path.suffix.lower() == ".csv" else parse_pdf(path)
 
-        source = (
-            path.parent.name
-            if path.parent.resolve() != statements_dir.resolve()
-            else path.stem
-        )
-
-        cursor = conn.execute(
-            "INSERT INTO imported_files (hash, filename, source, imported_at) "
-            "VALUES (?, ?, ?, datetime('now'))",
-            (file_hash, path.name, source),
-        )
-        file_id = cursor.lastrowid
-
-        for row in rows:
-            category_id = categorize(row["description"], conn)
-            conn.execute(
-                "INSERT INTO pending_transactions "
-                "(date, description, amount_cents, currency, category_id, source, file_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (row["date"], row["description"], row["amount_cents"],
-                 row["currency"], category_id, source, file_id),
+            source = (
+                path.parent.name
+                if path.parent.resolve() != statements_dir.resolve()
+                else path.stem
             )
-            created += 1
 
-    conn.commit()
+            cursor = conn.execute(
+                "INSERT INTO imported_files (hash, filename, source, imported_at) "
+                "VALUES (?, ?, ?, datetime('now'))",
+                (file_hash, path.name, source),
+            )
+            file_id = cursor.lastrowid
+
+            file_created = 0
+            for row in rows:
+                category_id = categorize(row["description"], conn)
+                conn.execute(
+                    "INSERT INTO pending_transactions "
+                    "(date, description, amount_cents, currency, category_id, source, file_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (row["date"], row["description"], row["amount_cents"],
+                     row["currency"], category_id, source, file_id),
+                )
+                file_created += 1
+        except Exception:
+            conn.rollback()
+            continue
+
+        conn.commit()
+        created += file_created
+
     return created
