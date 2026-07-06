@@ -21,10 +21,12 @@ def test_parse_line_returns_none_when_no_amount():
     assert _parse_line("01.03.2026 Migros Zürich") is None
 
 
-def test_parse_line_returns_none_when_amount_precedes_date():
+def test_parse_line_returns_none_when_date_and_amount_overlap():
     # The amount pattern's match starts before the date match ends (it overlaps
-    # the tail of the date), which must trip the malformed-order guard in
-    # _parse_line rather than being treated as a valid transaction line.
+    # the tail of the date). This yields an empty description slice
+    # (line[date_match.end():amount_match.start()] has start > end), so
+    # _parse_line returns None via the empty-description short-circuit rather
+    # than the separate start-order guard clause.
     assert _parse_line("Ref 01.03.2026.90") is None
 
 

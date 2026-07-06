@@ -24,6 +24,9 @@ def _parse_line(line):
     amount_match = AMOUNT_RE.search(line)
     if not date_match or not amount_match:
         return None
+    # Currently redundant with the empty-description check below (whenever this
+    # fires, the description slice is already empty), but kept as an explicit,
+    # self-documenting invariant in case the surrounding logic changes.
     if amount_match.start() < date_match.end():
         return None
 
