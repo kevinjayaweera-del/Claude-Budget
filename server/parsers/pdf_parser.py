@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 
 import pdfplumber
 
@@ -14,7 +15,8 @@ def _to_iso_date(value):
 def _amount_to_cents(value):
     normalized = value.replace("’", "").replace("'", "").replace(" ", "")
     normalized = normalized.replace(",", ".")
-    return round(float(normalized) * 100)
+    cents = Decimal(normalized) * 100
+    return int(cents.to_integral_value())
 
 
 def _parse_line(line):

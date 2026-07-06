@@ -21,6 +21,32 @@ def test_parse_line_returns_none_when_no_amount():
     assert _parse_line("01.03.2026 Migros Zürich") is None
 
 
+def test_parse_line_returns_none_when_amount_precedes_date():
+    # The amount pattern's match starts before the date match ends (it overlaps
+    # the tail of the date), which must trip the malformed-order guard in
+    # _parse_line rather than being treated as a valid transaction line.
+    assert _parse_line("Ref 01.03.2026.90") is None
+
+
+def test_parse_pdf_returns_empty_list_for_blank_page(tmp_path):
+    pdf_path = tmp_path / "blank.pdf"
+    c = canvas.Canvas(str(pdf_path))
+    c.showPage()
+    c.save()
+
+    assert parse_pdf(pdf_path) == []
+
+
+def test_parse_pdf_returns_empty_list_when_no_transaction_lines(tmp_path):
+    pdf_path = tmp_path / "no_transactions.pdf"
+    c = canvas.Canvas(str(pdf_path))
+    c.drawString(50, 800, "Kontoauszug März 2026")
+    c.drawString(50, 780, "Vielen Dank fuer Ihren Besuch")
+    c.save()
+
+    assert parse_pdf(pdf_path) == []
+
+
 def test_parse_pdf_extracts_transactions_from_real_pdf(tmp_path):
     pdf_path = tmp_path / "statement.pdf"
     c = canvas.Canvas(str(pdf_path))
