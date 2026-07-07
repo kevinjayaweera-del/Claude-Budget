@@ -1,4 +1,6 @@
 let categories = [];
+let categoryChart = null;
+let monthChart = null;
 
 async function loadCategories() {
   const res = await fetch("/api/categories");
@@ -86,6 +88,33 @@ async function loadSummary() {
   document.getElementById("total-balance").textContent = formatAmount(
     summary.total_income + summary.total_expense, "CHF"
   );
+
+  const categoryCtx = document.getElementById("category-chart");
+  if (categoryChart) categoryChart.destroy();
+  categoryChart = new Chart(categoryCtx, {
+    type: "doughnut",
+    data: {
+      labels: summary.by_category.map((c) => c.category),
+      datasets: [{ data: summary.by_category.map((c) => c.amount_cents / 100) }],
+    },
+    options: { plugins: { title: { display: true, text: "Ausgaben nach Kategorie" } } },
+  });
+
+  const monthCtx = document.getElementById("month-chart");
+  if (monthChart) monthChart.destroy();
+  monthChart = new Chart(monthCtx, {
+    type: "line",
+    data: {
+      labels: summary.by_month.map((m) => m.month),
+      datasets: [{
+        label: "Saldo pro Monat (CHF)",
+        data: summary.by_month.map((m) => m.amount_cents / 100),
+        borderColor: "#2f6f4f",
+        tension: 0.2,
+      }],
+    },
+    options: { plugins: { title: { display: true, text: "Verlauf über Zeit" } } },
+  });
 }
 
 async function refreshDashboard() {
