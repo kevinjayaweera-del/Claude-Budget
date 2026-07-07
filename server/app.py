@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pandas as pd
 from flask import Flask, current_app, jsonify, request, send_from_directory
 
 from server.db import get_connection, init_db
@@ -12,6 +13,38 @@ WEB_DIR = BASE_DIR / "web"
 
 def get_db():
     return get_connection(current_app.config["DB_PATH"])
+
+
+def _fetch_filtered_transactions(conn, args):
+    query = (
+        "SELECT t.id, t.date, t.description, t.amount_cents, t.currency, "
+        "t.category_id, c.name as category_name, t.source "
+        "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id WHERE 1=1"
+    )
+    params = []
+    if args.get("start"):
+        query += " AND t.date >= ?"
+        params.append(args["start"])
+    if args.get("end"):
+        query += " AND t.date <= ?"
+        params.append(args["end"])
+    if args.get("category_id"):
+        query += " AND t.category_id = ?"
+        params.append(args["category_id"])
+    if args.get("source"):
+        query += " AND t.source = ?"
+        params.append(args["source"])
+    if args.get("q"):
+        query += " AND t.description LIKE ?"
+        params.append(f"%{args['q']}%")
+    if args.get("min_amount"):
+        query += " AND t.amount_cents >= ?"
+        params.append(round(float(args["min_amount"]) * 100))
+    if args.get("max_amount"):
+        query += " AND t.amount_cents <= ?"
+        params.append(round(float(args["max_amount"]) * 100))
+    query += " ORDER BY t.date DESC"
+    return conn.execute(query, params).fetchall()
 
 
 def create_app(db_path=None, statements_dir=None):
@@ -114,6 +147,59 @@ def register_routes(app):
         rows = conn.execute("SELECT id, name FROM categories ORDER BY name").fetchall()
         conn.close()
         return jsonify([dict(r) for r in rows])
+
+    @app.route("/api/transactions", methods=["GET"])
+    def list_transactions():
+        conn = get_db()
+        rows = _fetch_filtered_transactions(conn, request.args)
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+
+    @app.route("/api/sources", methods=["GET"])
+    def list_sources():
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT DISTINCT source FROM transactions ORDER BY source"
+        ).fetchall()
+        conn.close()
+        return jsonify([r["source"] for r in rows])
+
+    @app.route("/api/summary", methods=["GET"])
+    def summary():
+        conn = get_db()
+        rows = _fetch_filtered_transactions(conn, request.args)
+        categories = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM categories")}
+        conn.close()
+
+        if not rows:
+            return jsonify({"total_income": 0, "total_expense": 0, "by_category": [], "by_month": []})
+
+        df = pd.DataFrame([dict(r) for r in rows])
+        total_income = int(df[df.amount_cents > 0]["amount_cents"].sum())
+        total_expense = int(df[df.amount_cents < 0]["amount_cents"].sum())
+
+        expenses = df[df.amount_cents < 0].copy()
+        by_category_list = []
+        if not expenses.empty:
+            grouped = expenses.groupby("category_id")["amount_cents"].sum().abs().reset_index()
+            by_category_list = [
+                {"category": categories.get(row.category_id, "Unbekannt"), "amount_cents": int(row.amount_cents)}
+                for row in grouped.itertuples()
+            ]
+
+        df["month"] = df["date"].str.slice(0, 7)
+        by_month = df.groupby("month")["amount_cents"].sum().reset_index()
+        by_month_list = [
+            {"month": row.month, "amount_cents": int(row.amount_cents)}
+            for row in by_month.itertuples()
+        ]
+
+        return jsonify({
+            "total_income": total_income,
+            "total_expense": total_expense,
+            "by_category": by_category_list,
+            "by_month": by_month_list,
+        })
 
 
 if __name__ == "__main__":
