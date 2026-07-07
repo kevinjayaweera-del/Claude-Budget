@@ -28,6 +28,16 @@ function formatAmount(cents, currency) {
   return (cents / 100).toLocaleString("de-CH", { style: "currency", currency: currency || "CHF" });
 }
 
+function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function buildQuery() {
   const params = new URLSearchParams();
   const start = document.getElementById("filter-start").value;
@@ -56,11 +66,11 @@ async function loadTransactions() {
   rows.forEach((row) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${row.date}</td>
-      <td>${row.description}</td>
-      <td>${row.category_name || "Unkategorisiert"}</td>
-      <td>${row.source}</td>
-      <td>${formatAmount(row.amount_cents, row.currency)}</td>
+      <td>${escapeHtml(row.date)}</td>
+      <td>${escapeHtml(row.description)}</td>
+      <td>${escapeHtml(row.category_name || "Unkategorisiert")}</td>
+      <td>${escapeHtml(row.source)}</td>
+      <td>${escapeHtml(formatAmount(row.amount_cents, row.currency))}</td>
     `;
     tbody.appendChild(tr);
   });
