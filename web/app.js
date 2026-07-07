@@ -123,8 +123,83 @@ async function refreshDashboard() {
 
 document.getElementById("apply-filters-btn").addEventListener("click", refreshDashboard);
 
+async function loadPending() {
+  const res = await fetch("/api/pending");
+  const rows = await res.json();
+  const section = document.getElementById("pending-section");
+  const tbody = document.querySelector("#pending-table tbody");
+  tbody.innerHTML = "";
+
+  if (rows.length === 0) {
+    section.classList.add("hidden");
+    return;
+  }
+  section.classList.remove("hidden");
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    tr.dataset.id = row.id;
+    const categoryOptions = categories
+      .map((c) => `<option value="${c.id}" ${c.id === row.category_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
+      .join("");
+    tr.innerHTML = `
+      <td><input type="date" value="${escapeHtml(row.date)}" data-field="date"></td>
+      <td><input type="text" value="${escapeHtml(row.description)}" data-field="description"></td>
+      <td><input type="number" step="0.01" value="${(row.amount_cents / 100).toFixed(2)}" data-field="amount"></td>
+      <td>${escapeHtml(row.currency)}</td>
+      <td><select data-field="category_id">${categoryOptions}</select></td>
+      <td><button type="button" data-action="delete">Löschen</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function savePendingRow(tr) {
+  const id = tr.dataset.id;
+  const date = tr.querySelector('[data-field="date"]').value;
+  const description = tr.querySelector('[data-field="description"]').value;
+  const amount = parseFloat(tr.querySelector('[data-field="amount"]').value);
+  const categoryId = parseInt(tr.querySelector('[data-field="category_id"]').value, 10);
+
+  await fetch(`/api/pending/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      date,
+      description,
+      amount_cents: Math.round(amount * 100),
+      currency: "CHF",
+      category_id: categoryId,
+    }),
+  });
+}
+
+document.getElementById("scan-btn").addEventListener("click", async () => {
+  await fetch("/api/scan", { method: "POST" });
+  await loadPending();
+});
+
+document.getElementById("confirm-btn").addEventListener("click", async () => {
+  const rows = document.querySelectorAll("#pending-table tbody tr");
+  for (const tr of rows) {
+    await savePendingRow(tr);
+  }
+  await fetch("/api/import/confirm", { method: "POST" });
+  await loadPending();
+  await refreshDashboard();
+});
+
+document.querySelector("#pending-table tbody").addEventListener("click", async (event) => {
+  if (event.target.dataset.action === "delete") {
+    const tr = event.target.closest("tr");
+    await fetch(`/api/pending/${tr.dataset.id}`, { method: "DELETE" });
+    tr.remove();
+  }
+});
+
 (async function init() {
   await loadCategories();
   await loadSources();
+  await loadPending();
   await refreshDashboard();
 })();
