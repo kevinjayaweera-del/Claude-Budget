@@ -74,6 +74,20 @@ def test_summary_by_category_groups_expenses(client_with_data):
     assert unkategorisiert["amount_cents"] == 7590
 
 
+def test_transactions_with_malformed_min_amount_returns_400(client_with_data):
+    response = client_with_data.get("/api/transactions?min_amount=abc")
+
+    assert response.status_code == 400
+    assert "error" in response.get_json()
+
+
+def test_summary_with_malformed_max_amount_returns_400(client_with_data):
+    response = client_with_data.get("/api/summary?max_amount=xyz")
+
+    assert response.status_code == 400
+    assert "error" in response.get_json()
+
+
 def test_summary_respects_category_filter(client_with_data):
     # None of the seeded transactions matches any category_rules, so they all
     # land in "Unkategorisiert". Filtering by an unrelated category must

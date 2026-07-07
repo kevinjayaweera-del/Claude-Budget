@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
-from flask import Flask, current_app, jsonify, request, send_from_directory
+from flask import Flask, abort, current_app, jsonify, request, send_from_directory
 
 from server.db import get_connection, init_db
 from server.import_service import scan_and_parse
@@ -38,11 +38,19 @@ def _fetch_filtered_transactions(conn, args):
         query += " AND t.description LIKE ?"
         params.append(f"%{args['q']}%")
     if args.get("min_amount"):
+        try:
+            min_amount = float(args["min_amount"])
+        except ValueError:
+            abort(400, description="min_amount must be a number")
         query += " AND t.amount_cents >= ?"
-        params.append(round(float(args["min_amount"]) * 100))
+        params.append(round(min_amount * 100))
     if args.get("max_amount"):
+        try:
+            max_amount = float(args["max_amount"])
+        except ValueError:
+            abort(400, description="max_amount must be a number")
         query += " AND t.amount_cents <= ?"
-        params.append(round(float(args["max_amount"]) * 100))
+        params.append(round(max_amount * 100))
     query += " ORDER BY t.date DESC"
     return conn.execute(query, params).fetchall()
 
@@ -59,6 +67,11 @@ def create_app(db_path=None, statements_dir=None):
 
 
 def register_routes(app):
+    @app.errorhandler(400)
+    def handle_bad_request(error):
+        message = error.description if getattr(error, "description", None) else "bad request"
+        return jsonify({"error": message}), 400
+
     @app.route("/")
     def index():
         return send_from_directory(WEB_DIR, "index.html")
