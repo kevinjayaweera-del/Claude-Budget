@@ -59,6 +59,57 @@ def test_update_pending_row_changes_category(client, tmp_path):
     assert updated["category_id"] == categories["Lebensmittel"]
 
 
+def test_update_pending_row_with_missing_body_returns_400(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+    pending_id = client.get("/api/pending").get_json()[0]["id"]
+
+    response = client.put(f"/api/pending/{pending_id}")
+
+    assert response.status_code == 400
+
+
+def test_update_pending_row_with_missing_field_returns_400(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+    pending_id = client.get("/api/pending").get_json()[0]["id"]
+
+    response = client.put(f"/api/pending/{pending_id}", json={
+        "date": "2026-03-01",
+        "description": "Migros Zürich",
+        "amount_cents": -4590,
+        "currency": "CHF",
+        # category_id intentionally omitted
+    })
+
+    assert response.status_code == 400
+
+
+def test_update_nonexistent_pending_row_returns_404(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+    categories = {c["name"]: c["id"] for c in client.get("/api/categories").get_json()}
+
+    response = client.put("/api/pending/99999", json={
+        "date": "2026-03-01",
+        "description": "Migros Zürich",
+        "amount_cents": -4590,
+        "currency": "CHF",
+        "category_id": categories["Lebensmittel"],
+    })
+
+    assert response.status_code == 404
+
+
+def test_delete_nonexistent_pending_row_returns_404(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+
+    response = client.delete("/api/pending/99999")
+
+    assert response.status_code == 404
+
+
 def test_delete_pending_row_removes_it(client, tmp_path):
     _write_sample_csv(tmp_path)
     client.post("/api/scan")

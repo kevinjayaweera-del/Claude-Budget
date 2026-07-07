@@ -55,24 +55,37 @@ def register_routes(app):
 
     @app.route("/api/pending/<int:pending_id>", methods=["PUT"])
     def update_pending(pending_id):
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        required_fields = ("date", "description", "amount_cents", "currency", "category_id")
+        if data is None or any(field not in data for field in required_fields):
+            return jsonify({"error": "request body must include date, description, "
+                                      "amount_cents, currency, and category_id"}), 400
+
         conn = get_db()
-        conn.execute(
-            "UPDATE pending_transactions SET date=?, description=?, amount_cents=?, "
-            "currency=?, category_id=? WHERE id=?",
-            (data["date"], data["description"], data["amount_cents"],
-             data["currency"], data["category_id"], pending_id),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            cursor = conn.execute(
+                "UPDATE pending_transactions SET date=?, description=?, amount_cents=?, "
+                "currency=?, category_id=? WHERE id=?",
+                (data["date"], data["description"], data["amount_cents"],
+                 data["currency"], data["category_id"], pending_id),
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return jsonify({"error": "pending transaction not found"}), 404
+        finally:
+            conn.close()
         return jsonify({"ok": True})
 
     @app.route("/api/pending/<int:pending_id>", methods=["DELETE"])
     def delete_pending(pending_id):
         conn = get_db()
-        conn.execute("DELETE FROM pending_transactions WHERE id=?", (pending_id,))
-        conn.commit()
-        conn.close()
+        try:
+            cursor = conn.execute("DELETE FROM pending_transactions WHERE id=?", (pending_id,))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return jsonify({"error": "pending transaction not found"}), 404
+        finally:
+            conn.close()
         return jsonify({"ok": True})
 
     @app.route("/api/import/confirm", methods=["POST"])
