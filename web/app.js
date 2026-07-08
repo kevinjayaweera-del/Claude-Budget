@@ -276,12 +276,28 @@ async function savePendingRow(tr) {
   return true;
 }
 
+function showScanStatus(newPending, duplicatesSkipped) {
+  const status = document.getElementById("scan-status");
+  if (newPending === 0 && duplicatesSkipped === 0) {
+    status.textContent = "Keine neuen Dateien gefunden.";
+  } else if (newPending === 0 && duplicatesSkipped > 0) {
+    status.textContent = `Alle ${duplicatesSkipped} gefundenen Buchungen sind bereits vorhanden — keine neuen Buchungen.`;
+  } else if (duplicatesSkipped > 0) {
+    status.textContent = `${duplicatesSkipped} Dopplungen übersprungen, ${newPending} neue Buchungen zur Prüfung.`;
+  } else {
+    status.textContent = `${newPending} neue Buchungen zur Prüfung.`;
+  }
+  status.classList.remove("hidden");
+}
+
 document.getElementById("scan-btn").addEventListener("click", async () => {
   const res = await fetch("/api/scan", { method: "POST" });
   if (!res.ok) {
     alert("Fehler beim Scannen — bitte erneut versuchen.");
     return;
   }
+  const result = await res.json();
+  showScanStatus(result.new_pending, result.duplicates_skipped);
   await loadPending();
 });
 

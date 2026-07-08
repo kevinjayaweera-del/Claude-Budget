@@ -7,9 +7,37 @@ from server.parsers.pdf_parser import parse_pdf
 from server.categorize import categorize
 
 
+def _existing_counts(conn, keys):
+    """For each (date, description, amount_cents, currency) key, count how many
+    rows already exist across both transactions and pending_transactions.
+
+    Source is deliberately excluded from the key: re-exporting/re-downloading
+    the same statement often produces a different filename (the ZKB PDF this
+    was built against even bakes a generation timestamp into its own
+    filename), and source is derived from the filename for root-level files —
+    keying on source would silently defeat dedup on exactly the re-download
+    scenario this feature exists for.
+    """
+    counts = {}
+    for key in keys:
+        date, description, amount_cents, currency = key
+        row = conn.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM transactions WHERE date = ? AND description = ? "
+            " AND amount_cents = ? AND currency = ?) + "
+            "(SELECT COUNT(*) FROM pending_transactions WHERE date = ? AND description = ? "
+            " AND amount_cents = ? AND currency = ?) AS total",
+            (date, description, amount_cents, currency,
+             date, description, amount_cents, currency),
+        ).fetchone()
+        counts[key] = row["total"]
+    return counts
+
+
 def scan_and_parse(conn, statements_dir):
     statements_dir = Path(statements_dir)
     created = 0
+    duplicates_skipped = 0
 
     for path in sorted(statements_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in (".csv", ".pdf"):
@@ -38,8 +66,28 @@ def scan_and_parse(conn, statements_dir):
             )
             file_id = cursor.lastrowid
 
+            keys = [
+                (row["date"], row["description"], row["amount_cents"], row["currency"])
+                for row in rows
+            ]
+            existing_counts = _existing_counts(conn, set(keys))
+            matched_so_far = {}
+
             file_created = 0
-            for row in rows:
+            file_duplicates = 0
+            for row, key in zip(rows, keys):
+                already_matched = matched_so_far.get(key, 0)
+                if already_matched < existing_counts.get(key, 0):
+                    # This row's (date, description, amount, currency) combination
+                    # already accounts for an existing row we haven't matched yet —
+                    # treat it as a re-import of that same transaction and skip it.
+                    # Counting (rather than a blanket "seen before" flag) means a
+                    # third occurrence of an otherwise-identical transaction is
+                    # still correctly imported as new, not silently dropped.
+                    matched_so_far[key] = already_matched + 1
+                    file_duplicates += 1
+                    continue
+
                 category_id = categorize(row["description"], conn)
                 conn.execute(
                     "INSERT INTO pending_transactions "
@@ -56,5 +104,6 @@ def scan_and_parse(conn, statements_dir):
 
         conn.commit()
         created += file_created
+        duplicates_skipped += file_duplicates
 
-    return created
+    return {"created": created, "duplicates_skipped": duplicates_skipped}

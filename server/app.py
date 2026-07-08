@@ -83,9 +83,12 @@ def register_routes(app):
     @app.route("/api/scan", methods=["POST"])
     def scan():
         conn = get_db()
-        count = scan_and_parse(conn, current_app.config["STATEMENTS_DIR"])
+        result = scan_and_parse(conn, current_app.config["STATEMENTS_DIR"])
         conn.close()
-        return jsonify({"new_pending": count})
+        return jsonify({
+            "new_pending": result["created"],
+            "duplicates_skipped": result["duplicates_skipped"],
+        })
 
     @app.route("/api/pending", methods=["GET"])
     def list_pending():

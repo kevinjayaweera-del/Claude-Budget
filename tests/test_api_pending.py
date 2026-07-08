@@ -42,7 +42,26 @@ def test_scan_endpoint_returns_new_pending_count(client, tmp_path):
     response = client.post("/api/scan")
 
     assert response.status_code == 200
-    assert response.get_json() == {"new_pending": 1}
+    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0}
+
+
+def test_scan_endpoint_reports_duplicates_skipped_on_rescan_under_new_filename(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+
+    # Different byte content (extra row) than test.csv, so file-hash dedup
+    # doesn't short-circuit before transaction-level dedup runs — mirrors a
+    # re-downloaded statement whose export tool renames/re-timestamps the file.
+    (tmp_path / "statements" / "test_redownloaded.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n"
+        "01.03.2026;Migros Zürich;-45.90;CHF\n"
+        "02.03.2026;Coop Basel;-12.30;CHF\n",
+        encoding="utf-8-sig",
+    )
+    response = client.post("/api/scan")
+
+    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 1}
+    assert len(client.get("/api/pending").get_json()) == 2
 
 
 def test_pending_list_reflects_scanned_rows(client, tmp_path):

@@ -120,6 +120,15 @@ button, input, select {
   letter-spacing: -0.01em;
   margin: 0;
 }
+.scan-status {
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0.6rem 0.9rem;
+  margin: 0 0 1.5rem;
+}
 .btn {
   font-size: 13px;
   font-weight: 600;
