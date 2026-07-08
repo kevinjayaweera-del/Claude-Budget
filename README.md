@@ -4,15 +4,22 @@ Lokaler Budget-Tracker: Kontoauszüge (PDF/CSV) in `statements/` ablegen,
 im Dashboard importieren/prüfen, Ausgaben nach Kategorie und Zeitraum
 auswerten. Läuft komplett lokal, keine Cloud-Anbindung.
 
-## Einrichtung
+## Starten (Windows, empfohlen)
+
+Doppelklick auf **`Budget-Tracker-starten.bat`** im Projektordner. Beim ersten
+Start wird automatisch eine virtuelle Umgebung angelegt und alle
+Abhängigkeiten installiert (dauert einen Moment); danach startet der Server
+und das Dashboard öffnet sich automatisch im Browser
+(http://127.0.0.1:5000/). Der Server läuft in einem separaten Fenster
+("Budget Tracker Server") — zum Beenden dieses Fenster einfach schliessen.
+
+## Einrichtung & Starten (manuell / andere Betriebssysteme)
 
 ```bash
 python -m venv venv
 source venv/Scripts/activate   # Windows Git Bash; unter PowerShell: venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
-
-## Starten
 
 Vom Projekt-Hauptverzeichnis aus (wichtig: `-m server.app`, nicht `python server/app.py`,
 damit das `server`-Package korrekt aufgelöst wird):
