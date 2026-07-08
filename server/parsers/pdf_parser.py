@@ -3,8 +3,22 @@ from decimal import Decimal
 
 import pdfplumber
 
+# Legacy single-amount-column heuristic (line-based). Used as a fallback for
+# PDF layouts that don't expose separate Belastung/Gutschrift (debit/credit)
+# columns — e.g. credit card statements with one signed amount per line.
 DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
 AMOUNT_RE = re.compile(r"([+-]?\d{1,3}(?:['’]?\d{3})*[.,]\d{2})\s*$")
+
+# Column-aware parsing (word-position based). Used when a page exposes a
+# "Datum ... Belastung ... Gutschrift ..." table header (e.g. Swiss bank
+# statements like ZKB), where the same-line "last number" is the running
+# Saldo, not the transaction amount — the real amount only shows up in the
+# Belastung (debit) or Gutschrift (credit) column, identified by its
+# horizontal position, not its order in the extracted text.
+WORD_DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
+WORD_AMOUNT_RE = re.compile(r"^[+-]?\d{1,3}(?:['’]?\d{3})*[.,]\d{2}$")
+ROW_TOLERANCE = 3  # points; words within this vertical distance count as one row
+COLUMN_PADDING = 5  # points; slack added around a header label's x-range
 
 
 def _to_iso_date(value):
@@ -42,13 +56,109 @@ def _parse_line(line):
     }
 
 
+def _group_words_into_rows(words):
+    rows = []
+    for word in sorted(words, key=lambda w: w["top"]):
+        for row in rows:
+            if abs(row[0]["top"] - word["top"]) <= ROW_TOLERANCE:
+                row.append(word)
+                break
+        else:
+            rows.append([word])
+    for row in rows:
+        row.sort(key=lambda w: w["x0"])
+    return rows
+
+
+def _find_columns(rows):
+    """Locate a header row with Datum/Belastung/Gutschrift labels and return
+    their x-ranges, or None if this page has no such header."""
+    for row in rows:
+        labels = {word["text"].rstrip(":"): word for word in row}
+        if not ({"Datum", "Belastung", "Gutschrift"} <= labels.keys()):
+            continue
+
+        datum_x0 = labels["Datum"]["x0"]
+        belastung_x0 = labels["Belastung"]["x0"]
+        belastung_x1 = labels["Belastung"]["x1"]
+        gutschrift_x0 = labels["Gutschrift"]["x0"]
+        gutschrift_x1 = labels["Gutschrift"]["x1"]
+
+        # "Belastung"/"Gutschrift" are immediately followed by a "CHF" word;
+        # fold it into the column's right edge so amounts under "CHF" match.
+        for word in row:
+            if word["text"] == "CHF" and belastung_x1 <= word["x0"] <= belastung_x1 + 20:
+                belastung_x1 = word["x1"]
+            if word["text"] == "CHF" and gutschrift_x1 <= word["x0"] <= gutschrift_x1 + 20:
+                gutschrift_x1 = word["x1"]
+
+        return {
+            "datum_x0": datum_x0,
+            "belastung": (belastung_x0 - COLUMN_PADDING, belastung_x1 + COLUMN_PADDING),
+            "gutschrift": (gutschrift_x0 - COLUMN_PADDING, gutschrift_x1 + COLUMN_PADDING),
+        }
+    return None
+
+
+def _amount_in_range(word, x_range):
+    lo, hi = x_range
+    return lo <= word["x0"] and word["x1"] <= hi and WORD_AMOUNT_RE.match(word["text"])
+
+
+def _parse_columned_row(row, columns):
+    if not row:
+        return None
+    first = row[0]
+    if not WORD_DATE_RE.match(first["text"]):
+        return None
+    if abs(first["x0"] - columns["datum_x0"]) > COLUMN_PADDING:
+        return None
+
+    debit = next((w for w in row if _amount_in_range(w, columns["belastung"])), None)
+    credit = next((w for w in row if _amount_in_range(w, columns["gutschrift"])), None)
+    amount_word = debit or credit
+    if amount_word is None:
+        return None
+
+    description = " ".join(
+        w["text"] for w in row[1:] if w["x1"] <= columns["belastung"][0]
+    ).strip()
+    if not description:
+        return None
+
+    magnitude = abs(_amount_to_cents(amount_word["text"]))
+
+    return {
+        "date": _to_iso_date(first["text"]),
+        "description": description,
+        "amount_cents": -magnitude if debit is not None else magnitude,
+        "currency": "CHF",
+    }
+
+
 def parse_pdf(file_path):
     rows = []
+    columns = None
     with pdfplumber.open(file_path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text() or ""
-            for line in text.split("\n"):
-                parsed = _parse_line(line)
-                if parsed:
-                    rows.append(parsed)
+            words = page.extract_words()
+            if not words:
+                continue
+
+            page_rows = _group_words_into_rows(words)
+            page_columns = _find_columns(page_rows)
+            if page_columns:
+                columns = page_columns
+
+            if columns:
+                for row in page_rows:
+                    parsed = _parse_columned_row(row, columns)
+                    if parsed:
+                        rows.append(parsed)
+            else:
+                text = page.extract_text() or ""
+                for line in text.split("\n"):
+                    parsed = _parse_line(line)
+                    if parsed:
+                        rows.append(parsed)
     return rows
