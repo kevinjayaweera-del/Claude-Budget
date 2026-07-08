@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from server.file_hash import hash_file
@@ -48,8 +49,9 @@ def scan_and_parse(conn, statements_dir):
                      row["currency"], category_id, source, file_id),
                 )
                 file_created += 1
-        except Exception:
+        except Exception as exc:
             conn.rollback()
+            print(f"Skipping {path.name}: {exc}", file=sys.stderr)
             continue
 
         conn.commit()
