@@ -2,62 +2,116 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Budget Tracker</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 </head>
 <body>
-  <header>
-    <h1>Budget Tracker</h1>
-    <button id="scan-btn">Neue Dateien importieren</button>
-  </header>
+  <div class="page">
 
-  <section id="pending-section" class="hidden">
-    <h2>Zu prüfende Buchungen</h2>
-    <table id="pending-table">
-      <thead>
-        <tr><th>Datum</th><th>Beschreibung</th><th>Betrag</th><th>Währung</th><th>Kategorie</th><th></th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-    <button id="confirm-btn">Import bestätigen</button>
-  </section>
+    <header class="app-header">
+      <p class="app-title">Budget Tracker</p>
+      <button id="scan-btn" class="btn btn-primary" type="button">Neue Dateien importieren</button>
+    </header>
 
-  <section id="filters">
-    <label>Von <input type="date" id="filter-start"></label>
-    <label>Bis <input type="date" id="filter-end"></label>
-    <label>Kategorie
-      <select id="filter-category"><option value="">Alle Kategorien</option></select>
-    </label>
-    <label>Konto/Quelle
-      <select id="filter-source"><option value="">Alle Konten</option></select>
-    </label>
-    <label>Betrag von <input type="number" step="0.01" id="filter-min-amount" placeholder="z.B. -500"></label>
-    <label>Betrag bis <input type="number" step="0.01" id="filter-max-amount" placeholder="z.B. 0"></label>
-    <label>Suche <input type="text" id="filter-search" placeholder="z.B. Migros"></label>
-    <button id="apply-filters-btn">Filtern</button>
-  </section>
+    <section id="pending-section" class="hidden">
+      <div class="section-head">
+        <p class="section-title">Zu prüfende Buchungen</p>
+      </div>
+      <p class="review-note">Bitte Kategorie, Betrag und Datum prüfen, bevor du den Import bestätigst.</p>
+      <div class="ledger">
+        <table id="pending-table">
+          <thead>
+            <tr><th>Datum</th><th>Beschreibung</th><th class="num">Betrag</th><th>Kategorie</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pending-actions">
+        <button id="confirm-btn" class="btn btn-primary" type="button">Import bestätigen</button>
+      </div>
+    </section>
 
-  <section id="summary-cards">
-    <div class="card"><span class="label">Einnahmen</span><span id="total-income" class="value"></span></div>
-    <div class="card"><span class="label">Ausgaben</span><span id="total-expense" class="value"></span></div>
-    <div class="card"><span class="label">Saldo</span><span id="total-balance" class="value"></span></div>
-  </section>
+    <section class="hero">
+      <div>
+        <p class="hero-balance-label">Saldo</p>
+        <p class="hero-balance"><span class="ccy">CHF</span><span id="total-balance">0.00</span></p>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-tile">
+          <p class="stat-label">Einnahmen</p>
+          <p class="stat-value credit tabular" id="total-income">0.00</p>
+        </div>
+        <div class="stat-tile">
+          <p class="stat-label">Ausgaben</p>
+          <p class="stat-value debit tabular" id="total-expense">0.00</p>
+        </div>
+      </div>
+    </section>
 
-  <section id="charts">
-    <canvas id="category-chart"></canvas>
-    <canvas id="month-chart"></canvas>
-  </section>
+    <div class="toolbar">
+      <div class="field">
+        <label class="field-label" for="filter-start">Von</label>
+        <input id="filter-start" type="date">
+      </div>
+      <div class="field">
+        <label class="field-label" for="filter-end">Bis</label>
+        <input id="filter-end" type="date">
+      </div>
+      <div class="field">
+        <label class="field-label" for="filter-category">Kategorie</label>
+        <select id="filter-category"><option value="">Alle Kategorien</option></select>
+      </div>
+      <div class="field">
+        <label class="field-label" for="filter-source">Konto/Quelle</label>
+        <select id="filter-source"><option value="">Alle Konten</option></select>
+      </div>
+      <div class="field amount">
+        <label class="field-label" for="filter-min-amount">Betrag von</label>
+        <input id="filter-min-amount" type="number" step="0.01" placeholder="-500">
+      </div>
+      <div class="field amount">
+        <label class="field-label" for="filter-max-amount">Betrag bis</label>
+        <input id="filter-max-amount" type="number" step="0.01" placeholder="0">
+      </div>
+      <div class="field search">
+        <label class="field-label" for="filter-search">Suche</label>
+        <input id="filter-search" type="text" placeholder="z.B. Migros">
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button id="apply-filters-btn" class="btn btn-ghost" type="button">Filtern</button>
+    </div>
 
-  <section id="transactions-section">
-    <h2>Buchungen</h2>
-    <table id="transactions-table">
-      <thead>
-        <tr><th>Datum</th><th>Beschreibung</th><th>Kategorie</th><th>Quelle</th><th>Betrag</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </section>
+    <div class="panels">
+      <div class="panel">
+        <div class="section-head">
+          <p class="section-title">Ausgaben nach Kategorie</p>
+        </div>
+        <div id="category-bars"></div>
+      </div>
+
+      <div class="panel">
+        <div class="section-head">
+          <p class="section-title">Verlauf über Zeit</p>
+          <span class="section-note">Netto pro Monat</span>
+        </div>
+        <div id="trend-chart"></div>
+      </div>
+    </div>
+
+    <div class="section-head">
+      <p class="section-title">Buchungen</p>
+    </div>
+    <div class="ledger">
+      <table id="transactions-table">
+        <thead>
+          <tr><th>Datum</th><th>Beschreibung</th><th>Kategorie</th><th>Quelle</th><th class="num">Betrag</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+  </div>
 
   <script src="/app.js"></script>
 </body>

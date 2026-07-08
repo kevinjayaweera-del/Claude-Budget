@@ -1,6 +1,34 @@
 let categories = [];
-let categoryChart = null;
-let monthChart = null;
+
+const CATEGORY_COLORS = {
+  "Lebensmittel": "var(--cat-lebensmittel)",
+  "Miete/Wohnen": "var(--cat-miete-wohnen)",
+  "Freizeit": "var(--cat-freizeit)",
+  "Transport": "var(--cat-transport)",
+  "Versicherungen": "var(--cat-versicherungen)",
+  "Gesundheit": "var(--cat-gesundheit)",
+  "Shopping": "var(--cat-shopping)",
+  "Abos": "var(--cat-abos)",
+  "Sonstiges": "var(--cat-sonstiges)",
+  "Unkategorisiert": "var(--cat-unkategorisiert)",
+};
+const MONTH_LABELS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+
+function categoryColor(name) {
+  return CATEGORY_COLORS[name] || "var(--cat-sonstiges)";
+}
+
+function formatMonthLabel(yearMonth) {
+  const [year, month] = yearMonth.split("-");
+  const label = MONTH_LABELS[parseInt(month, 10) - 1] || month;
+  return `${label} ${year.slice(2)}`;
+}
+
+function formatDateSwiss(isoDate) {
+  const [year, month, day] = isoDate.split("-");
+  if (!year || !month || !day) return isoDate;
+  return `${day}.${month}.${year}`;
+}
 
 async function loadCategories() {
   const res = await fetch("/api/categories");
@@ -26,8 +54,8 @@ async function loadSources() {
   });
 }
 
-function formatAmount(cents, currency) {
-  return (cents / 100).toLocaleString("de-CH", { style: "currency", currency: currency || "CHF" });
+function formatMoney(cents) {
+  return (cents / 100).toLocaleString("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function escapeHtml(value) {
@@ -67,15 +95,98 @@ async function loadTransactions() {
   tbody.innerHTML = "";
   rows.forEach((row) => {
     const tr = document.createElement("tr");
+    const categoryName = row.category_name || "Unkategorisiert";
+    const color = categoryColor(categoryName);
+    const isCredit = row.amount_cents >= 0;
+    const sign = isCredit ? "+" : "−";
+    const amountStr = formatMoney(Math.abs(row.amount_cents));
+    const currencyTag = row.currency && row.currency !== "CHF"
+      ? ` <span class="currency-tag">${escapeHtml(row.currency)}</span>`
+      : "";
     tr.innerHTML = `
-      <td>${escapeHtml(row.date)}</td>
-      <td>${escapeHtml(row.description)}</td>
-      <td>${escapeHtml(row.category_name || "Unkategorisiert")}</td>
+      <td class="date mono">${escapeHtml(formatDateSwiss(row.date))}</td>
+      <td class="desc">${escapeHtml(row.description)}</td>
+      <td><span class="chip"><span class="dot" style="background: ${color}"></span>${escapeHtml(categoryName)}</span></td>
       <td>${escapeHtml(row.source)}</td>
-      <td>${escapeHtml(formatAmount(row.amount_cents, row.currency))}</td>
+      <td class="amount ${isCredit ? "credit" : "debit"} tabular">${sign}${amountStr}${currencyTag}</td>
     `;
     tbody.appendChild(tr);
   });
+}
+
+function renderCategoryBars(byCategory) {
+  const container = document.getElementById("category-bars");
+  container.innerHTML = "";
+  if (byCategory.length === 0) {
+    container.innerHTML = '<p class="panel-empty">Keine Ausgaben im gewählten Zeitraum.</p>';
+    return;
+  }
+  const sorted = [...byCategory].sort((a, b) => b.amount_cents - a.amount_cents);
+  const maxAmount = sorted[0].amount_cents;
+  sorted.forEach((entry) => {
+    const color = categoryColor(entry.category);
+    const pct = maxAmount > 0 ? Math.max((entry.amount_cents / maxAmount) * 100, 2) : 0;
+    const row = document.createElement("div");
+    row.className = "cat-row";
+    row.innerHTML = `
+      <span class="cat-dot" style="background: ${color}"></span>
+      <span class="cat-name">${escapeHtml(entry.category)}</span>
+      <span class="cat-track"><span class="cat-fill" style="width: ${pct}%; background: ${color}"></span></span>
+      <span class="cat-amount tabular">${formatMoney(entry.amount_cents)}</span>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function renderTrendChart(byMonth) {
+  const container = document.getElementById("trend-chart");
+  container.innerHTML = "";
+  if (byMonth.length === 0) {
+    container.innerHTML = '<p class="panel-empty">Keine Daten im gewählten Zeitraum.</p>';
+    return;
+  }
+
+  const sorted = [...byMonth].sort((a, b) => a.month.localeCompare(b.month));
+  const width = 400;
+  const height = 140;
+  const padY = 16;
+  const values = sorted.map((m) => m.amount_cents / 100);
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const range = max - min || 1;
+
+  const points = sorted.map((m, i) => {
+    const x = sorted.length === 1 ? width / 2 : (i / (sorted.length - 1)) * width;
+    const y = height - padY - ((m.amount_cents / 100 - min) / range) * (height - padY * 2);
+    return [x, y];
+  });
+
+  const linePath = points.map(([x, y], i) => `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
+  const [lastX, lastY] = points[points.length - 1];
+  const gridLines = [0.25, 0.5, 0.75]
+    .map((f) => `<line x1="0" y1="${(height * f).toFixed(1)}" x2="${width}" y2="${(height * f).toFixed(1)}" stroke="var(--line)" stroke-width="1" />`)
+    .join("");
+
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const ariaLabel = escapeHtml(
+    `Netto pro Monat, von ${formatMonthLabel(first.month)} (CHF ${formatMoney(first.amount_cents)}) bis ${formatMonthLabel(last.month)} (CHF ${formatMoney(last.amount_cents)})`
+  );
+
+  container.innerHTML = `
+    <figure class="trend-figure">
+      <svg viewBox="0 0 ${width} ${height}" width="100%" height="140" role="img" aria-label="${ariaLabel}">
+        ${gridLines}
+        <path d="${areaPath}" fill="var(--accent)" opacity="0.08" stroke="none" />
+        <path d="${linePath}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+        <circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" />
+      </svg>
+      <figcaption class="trend-caption">
+        ${sorted.map((m) => `<span>${escapeHtml(formatMonthLabel(m.month))}</span>`).join("")}
+      </figcaption>
+    </figure>
+  `;
 }
 
 async function loadSummary() {
@@ -83,38 +194,12 @@ async function loadSummary() {
   const res = await fetch(`/api/summary?${query}`);
   const summary = await res.json();
 
-  document.getElementById("total-income").textContent = formatAmount(summary.total_income, "CHF");
-  document.getElementById("total-expense").textContent = formatAmount(summary.total_expense, "CHF");
-  document.getElementById("total-balance").textContent = formatAmount(
-    summary.total_income + summary.total_expense, "CHF"
-  );
+  document.getElementById("total-income").textContent = formatMoney(summary.total_income);
+  document.getElementById("total-expense").textContent = formatMoney(Math.abs(summary.total_expense));
+  document.getElementById("total-balance").textContent = formatMoney(summary.total_income + summary.total_expense);
 
-  const categoryCtx = document.getElementById("category-chart");
-  if (categoryChart) categoryChart.destroy();
-  categoryChart = new Chart(categoryCtx, {
-    type: "doughnut",
-    data: {
-      labels: summary.by_category.map((c) => c.category),
-      datasets: [{ data: summary.by_category.map((c) => c.amount_cents / 100) }],
-    },
-    options: { plugins: { title: { display: true, text: "Ausgaben nach Kategorie" } } },
-  });
-
-  const monthCtx = document.getElementById("month-chart");
-  if (monthChart) monthChart.destroy();
-  monthChart = new Chart(monthCtx, {
-    type: "line",
-    data: {
-      labels: summary.by_month.map((m) => m.month),
-      datasets: [{
-        label: "Saldo pro Monat (CHF)",
-        data: summary.by_month.map((m) => m.amount_cents / 100),
-        borderColor: "#2f6f4f",
-        tension: 0.2,
-      }],
-    },
-    options: { plugins: { title: { display: true, text: "Verlauf über Zeit" } } },
-  });
+  renderCategoryBars(summary.by_category);
+  renderTrendChart(summary.by_month);
 }
 
 async function refreshDashboard() {
@@ -143,13 +228,17 @@ async function loadPending() {
     const categoryOptions = categories
       .map((c) => `<option value="${c.id}" ${c.id === row.category_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
       .join("");
+    const currencyTag = row.currency && row.currency !== "CHF"
+      ? `<span class="currency-tag">${escapeHtml(row.currency)}</span>`
+      : "";
     tr.innerHTML = `
       <td><input type="date" value="${escapeHtml(row.date)}" data-field="date"></td>
       <td><input type="text" value="${escapeHtml(row.description)}" data-field="description"></td>
-      <td><input type="number" step="0.01" value="${(row.amount_cents / 100).toFixed(2)}" data-field="amount"></td>
-      <td>${escapeHtml(row.currency)}</td>
+      <td class="amount-cell">
+        <input type="number" step="0.01" value="${(row.amount_cents / 100).toFixed(2)}" data-field="amount">${currencyTag}
+      </td>
       <td><select data-field="category_id">${categoryOptions}</select></td>
-      <td><button type="button" data-action="delete">Löschen</button></td>
+      <td><button type="button" class="btn-danger" data-action="delete">Löschen</button></td>
     `;
     tbody.appendChild(tr);
   });
