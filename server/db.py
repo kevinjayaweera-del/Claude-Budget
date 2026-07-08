@@ -45,10 +45,105 @@ CREATE TABLE IF NOT EXISTS pending_transactions (
 );
 """
 
+# Derived from Kevin's real ZKB bank statements (CSV/PDF) and Swisscard/
+# Cornercard credit card statements — see docs/superpowers/specs for the
+# analysis. Goal: the first real import needs as little manual
+# categorization as possible.
 DEFAULT_CATEGORIES = [
-    "Lebensmittel", "Miete/Wohnen", "Freizeit", "Transport",
-    "Versicherungen", "Gesundheit", "Shopping", "Abos", "Sonstiges",
-    "Unkategorisiert",
+    "Lebensmittel", "Restaurants/Ausgang", "Transport", "Reisen",
+    "Miete/Wohnen", "Versicherungen", "Gesundheit", "Shopping", "Abos",
+    "Freizeit", "Bargeldbezug", "Privatüberweisungen", "Sparen/Anlegen",
+    "Lohn/Einkommen", "Sonstiges", "Unkategorisiert",
+]
+
+# (keyword, category_name) — keyword must be lowercase (categorize() matches
+# against a lowercased description) and is matched as a substring, so a more
+# specific/longer keyword should be used wherever a shorter one would
+# otherwise misfire (see "sbb mobile" vs "twint" below).
+DEFAULT_CATEGORY_RULES = [
+    # Lebensmittel
+    ("migros", "Lebensmittel"),
+    ("coop", "Lebensmittel"),
+    ("volg", "Lebensmittel"),
+    ("denner", "Lebensmittel"),
+    # "metzg"/"confis"/"bäckerei"+"baeckerei" deliberately cover both the
+    # full German word and the shortened Swiss-German / ASCII-transliterated
+    # forms seen across different statement exports (e.g. "CHAEMI METZG AG",
+    # "Confiseur Bachmann AG", "BAECKEREI BODE" vs "Bäckerei ...").
+    ("metzg", "Lebensmittel"),
+    ("bäckerei", "Lebensmittel"),
+    ("baeckerei", "Lebensmittel"),
+    ("back.-conf.", "Lebensmittel"),
+    ("confis", "Lebensmittel"),
+    # Restaurants/Ausgang
+    ("pizza falcone", "Restaurants/Ausgang"),
+    ("curry factory", "Restaurants/Ausgang"),
+    ("bar / restaurant caled", "Restaurants/Ausgang"),
+    ("kuhn back & gastro", "Restaurants/Ausgang"),
+    ("autogrill", "Restaurants/Ausgang"),
+    ("* eats", "Restaurants/Ausgang"),
+    # Transport (checked before generic "twint" below due to length)
+    ("sbb", "Transport"),
+    ("sbb mobile", "Transport"),
+    ("tankstell", "Transport"),
+    ("parkingpay", "Transport"),
+    ("taxifahrt", "Transport"),
+    ("ubr* pending", "Transport"),
+    # Generic ride/refund fallback — shorter than "* eats" above, so a food
+    # delivery line still wins Restaurants/Ausgang; this only catches plain
+    # Uber rides and refunds like "Rückerstattung ... UBER 00000 AMSTERDAM".
+    ("uber", "Transport"),
+    ("bergbahnen", "Freizeit"),
+    # Reisen
+    ("swiss intl air lines", "Reisen"),
+    ("easyjet", "Reisen"),
+    ("emirates", "Reisen"),
+    ("hotel", "Reisen"),
+    ("airbnb", "Reisen"),
+    ("meininger", "Reisen"),
+    # Versicherungen
+    ("ökk", "Versicherungen"),
+    ("helsana", "Versicherungen"),
+    ("axa leben", "Versicherungen"),
+    # Gesundheit
+    ("apotheke", "Gesundheit"),
+    # Shopping
+    ("zalando", "Shopping"),
+    ("digitec galaxus", "Shopping"),
+    ("galaxus mobile", "Shopping"),
+    ("media markt", "Shopping"),
+    ("velotec", "Shopping"),
+    ("calzedoni", "Shopping"),
+    ("cutie socks", "Shopping"),
+    ("scooter planet", "Shopping"),
+    ("ofinto", "Shopping"),
+    ("baby-walz", "Shopping"),
+    # Abos
+    ("spotify", "Abos"),
+    ("netflix", "Abos"),
+    ("apple.com/bill", "Abos"),
+    ("sayintentions", "Abos"),
+    # Freizeit
+    ("steamgames", "Freizeit"),
+    ("coiffure", "Freizeit"),
+    # Bargeldbezug
+    ("bezug zkb visa debit card", "Bargeldbezug"),
+    # Sparen/Anlegen
+    ("findependent", "Sparen/Anlegen"),
+    # Sonstiges — card-bill settlements and unclear small vendors, kept out
+    # of real spending categories
+    ("ihre zahlung", "Sonstiges"),
+    ("saldovortrag", "Sonstiges"),
+    ("ubs - zahlungen div", "Sonstiges"),
+    ("corporate benefits", "Sonstiges"),
+    ("marko switzerland", "Sonstiges"),
+    # Privatüberweisungen — generic TWINT catch-all. Kept last / shortest on
+    # purpose: every merchant-routed "TWINT: X" line above has a longer,
+    # more specific keyword that must win first (categorize() prefers the
+    # longest matching keyword), so this only catches person-to-person
+    # transfers like "TWINT: SCHWARTZ, PATRICK +4176..." that have no
+    # merchant-specific rule.
+    ("twint", "Privatüberweisungen"),
 ]
 
 
@@ -65,5 +160,13 @@ def init_db(db_path):
     conn.executescript(SCHEMA)
     for name in DEFAULT_CATEGORIES:
         conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (name,))
+    for keyword, category_name in DEFAULT_CATEGORY_RULES:
+        category_id = conn.execute(
+            "SELECT id FROM categories WHERE name = ?", (category_name,)
+        ).fetchone()["id"]
+        conn.execute(
+            "INSERT OR IGNORE INTO category_rules (keyword, category_id) VALUES (?, ?)",
+            (keyword, category_id),
+        )
     conn.commit()
     return conn

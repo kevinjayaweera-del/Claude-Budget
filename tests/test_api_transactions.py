@@ -9,11 +9,15 @@ def client_with_data(tmp_path):
     app.config["TESTING"] = True
     client = app.test_client()
 
+    # Deliberately fictional merchant names (not "Migros"/"Coop" etc.): these
+    # tests rely on the rows landing in "Unkategorisiert" by default, which
+    # only holds for descriptions that don't match any of init_db()'s
+    # pre-seeded DEFAULT_CATEGORY_RULES.
     (tmp_path / "statements" / "test.csv").write_text(
         "Datum;Buchungstext;Betrag;Währung\n"
-        "01.03.2026;Migros Zürich;-45.90;CHF\n"
+        "01.03.2026;Musterladen Zürich;-45.90;CHF\n"
         "05.04.2026;Lohn April;5200.00;CHF\n"
-        "10.04.2026;Coop Zürich;-30.00;CHF\n",
+        "10.04.2026;Beispielmarkt Zürich;-30.00;CHF\n",
         encoding="utf-8-sig",
     )
     client.post("/api/scan")
@@ -29,17 +33,17 @@ def test_transactions_filtered_by_date_range(client_with_data):
 
 
 def test_transactions_filtered_by_text_search(client_with_data):
-    rows = client_with_data.get("/api/transactions?q=Migros").get_json()
+    rows = client_with_data.get("/api/transactions?q=Musterladen").get_json()
 
     assert len(rows) == 1
-    assert rows[0]["description"] == "Migros Zürich"
+    assert rows[0]["description"] == "Musterladen Zürich"
 
 
 def test_transactions_filtered_by_amount_range(client_with_data):
     rows = client_with_data.get("/api/transactions?min_amount=-40&max_amount=-1").get_json()
 
     assert len(rows) == 1
-    assert rows[0]["description"] == "Coop Zürich"
+    assert rows[0]["description"] == "Beispielmarkt Zürich"
 
 
 def test_transactions_filtered_by_source(client_with_data):

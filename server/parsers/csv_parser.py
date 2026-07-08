@@ -3,8 +3,10 @@ from datetime import datetime
 
 DATE_COLUMNS = ["datum", "buchungsdatum", "date", "buchungstag"]
 AMOUNT_COLUMNS = ["betrag", "amount", "umsatz"]
+DEBIT_COLUMNS = ["belastung", "belastung chf"]
+CREDIT_COLUMNS = ["gutschrift", "gutschrift chf"]
 DESCRIPTION_COLUMNS = ["text", "verwendungszweck", "beschreibung", "buchungstext", "description"]
-CURRENCY_COLUMNS = ["währung", "waehrung", "currency"]
+CURRENCY_COLUMNS = ["währung", "waehrung", "currency", "whg"]
 
 DATE_FORMATS = ["%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"]
 
@@ -57,22 +59,44 @@ def parse_csv(file_path):
             raise CsvParseError("Leere oder unlesbare CSV-Datei")
 
         date_col = _find_column(reader.fieldnames, DATE_COLUMNS)
-        amount_col = _find_column(reader.fieldnames, AMOUNT_COLUMNS)
         desc_col = _find_column(reader.fieldnames, DESCRIPTION_COLUMNS)
         currency_col = _find_column(reader.fieldnames, CURRENCY_COLUMNS)
+        amount_col = _find_column(reader.fieldnames, AMOUNT_COLUMNS)
+        debit_col = _find_column(reader.fieldnames, DEBIT_COLUMNS)
+        credit_col = _find_column(reader.fieldnames, CREDIT_COLUMNS)
 
-        if not date_col or not amount_col or not desc_col:
+        # Some exports (e.g. a fuller ZKB CSV variant, mirroring the PDF
+        # layout) use separate debit/credit columns instead of one signed
+        # "Betrag" column. Only fall back to that when no single amount
+        # column was found, so existing single-column exports are unaffected.
+        use_split_columns = not amount_col and debit_col and credit_col
+
+        if not date_col or not desc_col or not (amount_col or use_split_columns):
             raise CsvParseError(
                 f"Konnte Spalten nicht erkennen. Gefunden: {reader.fieldnames}"
             )
 
         rows = []
         for row in reader:
+            if use_split_columns:
+                debit = row.get(debit_col, "").strip()
+                credit = row.get(credit_col, "").strip()
+                if debit:
+                    amount_cents = -abs(_parse_amount_cents(debit))
+                elif credit:
+                    amount_cents = abs(_parse_amount_cents(credit))
+                else:
+                    raise CsvParseError(
+                        f"Weder Belastung noch Gutschrift gefüllt in Zeile: {row}"
+                    )
+            else:
+                amount_cents = _parse_amount_cents(row[amount_col])
+
             rows.append({
                 "date": _parse_date(row[date_col]),
                 "description": row[desc_col].strip(),
-                "amount_cents": _parse_amount_cents(row[amount_col]),
-                "currency": (row.get(currency_col) or "").strip() if currency_col else "" ,
+                "amount_cents": amount_cents,
+                "currency": (row.get(currency_col) or "").strip() if currency_col else "",
             })
         for row in rows:
             if not row["currency"]:
