@@ -139,6 +139,7 @@ async function loadPending() {
   rows.forEach((row) => {
     const tr = document.createElement("tr");
     tr.dataset.id = row.id;
+    tr.dataset.currency = row.currency;
     const categoryOptions = categories
       .map((c) => `<option value="${c.id}" ${c.id === row.category_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
       .join("");
@@ -160,31 +161,65 @@ async function savePendingRow(tr) {
   const description = tr.querySelector('[data-field="description"]').value;
   const amount = parseFloat(tr.querySelector('[data-field="amount"]').value);
   const categoryId = parseInt(tr.querySelector('[data-field="category_id"]').value, 10);
+  const currency = tr.dataset.currency;
 
-  await fetch(`/api/pending/${id}`, {
+  if (Number.isNaN(amount) || Number.isNaN(categoryId)) {
+    alert(`Ungültiger Betrag oder keine Kategorie in Zeile für "${description}" — bitte korrigieren.`);
+    return false;
+  }
+
+  const res = await fetch(`/api/pending/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       date,
       description,
       amount_cents: Math.round(amount * 100),
-      currency: "CHF",
+      currency,
       category_id: categoryId,
     }),
   });
+
+  if (!res.ok) {
+    alert("Fehler beim Speichern — bitte erneut versuchen.");
+    return false;
+  }
+  return true;
 }
 
 document.getElementById("scan-btn").addEventListener("click", async () => {
-  await fetch("/api/scan", { method: "POST" });
+  const res = await fetch("/api/scan", { method: "POST" });
+  if (!res.ok) {
+    alert("Fehler beim Scannen — bitte erneut versuchen.");
+    return;
+  }
   await loadPending();
 });
 
 document.getElementById("confirm-btn").addEventListener("click", async () => {
   const rows = document.querySelectorAll("#pending-table tbody tr");
+  let allSaved = true;
+  const ids = [];
   for (const tr of rows) {
-    await savePendingRow(tr);
+    const saved = await savePendingRow(tr);
+    if (!saved) {
+      allSaved = false;
+    }
+    ids.push(parseInt(tr.dataset.id, 10));
   }
-  await fetch("/api/import/confirm", { method: "POST" });
+  if (!allSaved) {
+    alert("Einige Zeilen konnten nicht gespeichert werden — Import abgebrochen.");
+    return;
+  }
+  const res = await fetch("/api/import/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    alert("Fehler beim Importieren — bitte erneut versuchen.");
+    return;
+  }
   await loadPending();
   await refreshDashboard();
 });
@@ -192,7 +227,11 @@ document.getElementById("confirm-btn").addEventListener("click", async () => {
 document.querySelector("#pending-table tbody").addEventListener("click", async (event) => {
   if (event.target.dataset.action === "delete") {
     const tr = event.target.closest("tr");
-    await fetch(`/api/pending/${tr.dataset.id}`, { method: "DELETE" });
+    const res = await fetch(`/api/pending/${tr.dataset.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      alert("Fehler beim Löschen — bitte erneut versuchen.");
+      return;
+    }
     tr.remove();
   }
 });

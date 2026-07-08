@@ -137,7 +137,15 @@ def register_routes(app):
     @app.route("/api/import/confirm", methods=["POST"])
     def confirm_import():
         conn = get_db()
-        rows = conn.execute("SELECT * FROM pending_transactions").fetchall()
+        data = request.get_json(silent=True)
+        ids = data.get("ids") if data else None
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            rows = conn.execute(
+                f"SELECT * FROM pending_transactions WHERE id IN ({placeholders})", ids
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM pending_transactions").fetchall()
         for row in rows:
             conn.execute(
                 "INSERT INTO transactions "
@@ -148,7 +156,11 @@ def register_routes(app):
             )
             if row["category_id"] is not None:
                 learn_rule(conn, row["description"], row["category_id"])
-        conn.execute("DELETE FROM pending_transactions")
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(f"DELETE FROM pending_transactions WHERE id IN ({placeholders})", ids)
+        else:
+            conn.execute("DELETE FROM pending_transactions")
         conn.commit()
         imported = len(rows)
         conn.close()
