@@ -231,13 +231,20 @@ async function loadPending() {
     const currencyTag = row.currency && row.currency !== "CHF"
       ? `<span class="currency-tag">${escapeHtml(row.currency)}</span>`
       : "";
+    const confidence = row.category_confidence;
+    let confidenceBadge = "";
+    if (confidence !== null && confidence !== undefined) {
+      const level = confidence >= 0.75 ? "high" : "low";
+      const title = `${Math.round(confidence * 100)}% Konfidenz`;
+      confidenceBadge = `<span class="confidence-dot ${level}" title="${title}"></span>`;
+    }
     tr.innerHTML = `
       <td><input type="date" value="${escapeHtml(row.date)}" data-field="date"></td>
       <td><input type="text" value="${escapeHtml(row.description)}" data-field="description"></td>
       <td class="amount-cell">
         <input type="number" step="0.01" value="${(row.amount_cents / 100).toFixed(2)}" data-field="amount">${currencyTag}
       </td>
-      <td><select data-field="category_id">${categoryOptions}</select></td>
+      <td><select data-field="category_id">${categoryOptions}</select>${confidenceBadge}</td>
       <td><button type="button" class="btn-danger" data-action="delete">Löschen</button></td>
     `;
     tbody.appendChild(tr);

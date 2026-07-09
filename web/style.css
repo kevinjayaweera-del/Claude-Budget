@@ -11,6 +11,8 @@
   --accent-ink: #ffffff;
   --credit: #3c6e52;
   --debit: #b03a2e;
+  --confidence-high: #3c6e52;
+  --confidence-low: #b8860b;
 
   --cat-lebensmittel: #7a8b5c;
   --cat-miete-wohnen: #6b7a99;
@@ -45,6 +47,8 @@
     --accent-ink: #17181a;
     --credit: #6fa687;
     --debit: #e0685c;
+    --confidence-high: #6fa687;
+    --confidence-low: #e0b84a;
   }
 }
 :root[data-theme="dark"] {
@@ -60,6 +64,8 @@
   --accent-ink: #17181a;
   --credit: #6fa687;
   --debit: #e0685c;
+  --confidence-high: #6fa687;
+  --confidence-low: #e0b84a;
 }
 :root[data-theme="light"] {
   --paper: #f6f5f0;
@@ -74,6 +80,8 @@
   --accent-ink: #ffffff;
   --credit: #3c6e52;
   --debit: #b03a2e;
+  --confidence-high: #3c6e52;
+  --confidence-low: #b8860b;
 }
 
 * { box-sizing: border-box; }
@@ -386,6 +394,17 @@ td.amount.debit { color: var(--debit); }
   white-space: nowrap;
 }
 .chip .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+
+.confidence-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.confidence-dot.high { background: var(--confidence-high); }
+.confidence-dot.low { background: var(--confidence-low); }
 
 /* ---------- Correction ledger (pending review) ---------- */
 #pending-section {
