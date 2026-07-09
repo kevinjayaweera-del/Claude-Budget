@@ -371,21 +371,6 @@ document.getElementById("confirm-btn").addEventListener("click", async () => {
   await refreshDashboard();
 });
 
-document.getElementById("reset-db-btn").addEventListener("click", async () => {
-  const confirmed = confirm(
-    "Wirklich die gesamte Datenbank löschen? Alle Buchungen, Importe und gelernten " +
-    "Regeln werden entfernt und die Standardkategorien neu geladen. " +
-    "Dies kann nicht rückgängig gemacht werden."
-  );
-  if (!confirmed) return;
-  const res = await fetch("/api/database/reset", { method: "POST" });
-  if (!res.ok) {
-    alert("Fehler beim Zurücksetzen — bitte erneut versuchen.");
-    return;
-  }
-  window.location.reload();
-});
-
 (async function init() {
   await loadCategories();
   await loadSources();

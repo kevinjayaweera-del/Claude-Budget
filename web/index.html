@@ -7,16 +7,12 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div class="app-shell">
+  <nav class="sidebar" id="sidebar" data-active="dashboard"></nav>
   <div class="page">
 
-    <div class="dev-reset-bar">
-      <span class="dev-reset-label">Test-Werkzeug</span>
-      <button id="reset-db-btn" class="btn btn-danger" type="button">Datenbank zurücksetzen</button>
-    </div>
-
     <header class="app-header">
-      <p class="app-title">Budget Tracker</p>
-      <a href="/regeln.html" class="btn btn-ghost">Regeln verwalten</a>
+      <p class="app-title">Übersicht</p>
       <button id="scan-btn" class="btn btn-primary" type="button">Neue Dateien importieren</button>
     </header>
 
@@ -129,7 +125,9 @@
     </div>
 
   </div>
+  </div>
 
+  <script src="/sidebar.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

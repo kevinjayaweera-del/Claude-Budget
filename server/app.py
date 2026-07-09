@@ -249,6 +249,51 @@ def register_routes(app):
             conn.close()
         return jsonify({"ok": True})
 
+    @app.route("/api/budgets", methods=["GET"])
+    def list_budgets():
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT b.id, b.category_id, c.name as category_name, b.monthly_limit_cents "
+            "FROM budgets b JOIN categories c ON b.category_id = c.id "
+            "ORDER BY c.name"
+        ).fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+
+    @app.route("/api/budgets/<int:category_id>", methods=["PUT"])
+    def set_budget(category_id):
+        data = request.get_json(silent=True)
+        if data is None or "monthly_limit_cents" not in data:
+            return jsonify({"error": "request body must include monthly_limit_cents"}), 400
+        conn = get_db()
+        try:
+            category = conn.execute(
+                "SELECT id FROM categories WHERE id = ?", (category_id,)
+            ).fetchone()
+            if category is None:
+                return jsonify({"error": "category not found"}), 404
+            conn.execute(
+                "INSERT INTO budgets (category_id, monthly_limit_cents) VALUES (?, ?) "
+                "ON CONFLICT(category_id) DO UPDATE SET monthly_limit_cents = excluded.monthly_limit_cents",
+                (category_id, data["monthly_limit_cents"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
+    @app.route("/api/budgets/<int:category_id>", methods=["DELETE"])
+    def delete_budget(category_id):
+        conn = get_db()
+        try:
+            cursor = conn.execute("DELETE FROM budgets WHERE category_id = ?", (category_id,))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return jsonify({"error": "budget not found"}), 404
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
     @app.route("/api/categories", methods=["GET"])
     def list_categories():
         conn = get_db()

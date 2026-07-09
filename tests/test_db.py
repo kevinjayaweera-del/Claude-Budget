@@ -235,3 +235,33 @@ def test_reset_db_clears_all_data_and_reseeds_defaults(tmp_path):
     rule_count = conn.execute("SELECT COUNT(*) c FROM category_rules").fetchone()["c"]
     assert rule_count == len(DEFAULT_CATEGORY_RULES)
     conn.close()
+
+
+def test_init_db_creates_budgets_table(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+
+    tables = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    assert "budgets" in tables
+    conn.close()
+
+
+def test_reset_db_clears_budgets(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    lebensmittel_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Lebensmittel'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO budgets (category_id, monthly_limit_cents) VALUES (?, 50000)",
+        (lebensmittel_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    conn = reset_db(db_path)
+
+    assert conn.execute("SELECT COUNT(*) c FROM budgets").fetchone()["c"] == 0
+    conn.close()

@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS pending_transactions (
     source TEXT NOT NULL,
     file_id INTEGER REFERENCES imported_files(id)
 );
+
+CREATE TABLE IF NOT EXISTS budgets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category_id INTEGER NOT NULL UNIQUE REFERENCES categories(id),
+    monthly_limit_cents INTEGER NOT NULL
+);
 """
 
 # Columns added after the initial schema. Applied via idempotent ALTER TABLE
@@ -225,6 +231,7 @@ def reset_db(db_path):
     conn.execute("DELETE FROM pending_transactions")
     conn.execute("DELETE FROM imported_files")
     conn.execute("DELETE FROM category_rules")
+    conn.execute("DELETE FROM budgets")
     conn.execute("DELETE FROM categories")
     conn.commit()
     conn.close()
