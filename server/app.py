@@ -5,7 +5,7 @@ from flask import Flask, abort, current_app, jsonify, request, send_from_directo
 
 from server.db import get_connection, init_db
 from server.import_service import scan_and_parse
-from server.categorize import RuleBasedCategorizer
+from server.categorize import RuleBasedCategorizer, compute_confidence
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
@@ -95,7 +95,7 @@ def register_routes(app):
         conn = get_db()
         rows = conn.execute(
             "SELECT p.id, p.date, p.description, p.amount_cents, p.currency, "
-            "p.category_id, c.name as category_name, p.source "
+            "p.category_id, c.name as category_name, p.source, p.category_confidence "
             "FROM pending_transactions p LEFT JOIN categories c ON p.category_id = c.id "
             "ORDER BY p.date"
         ).fetchall()
@@ -188,6 +188,53 @@ def register_routes(app):
         imported = len(rows)
         conn.close()
         return jsonify({"imported": imported})
+
+    @app.route("/api/rules", methods=["GET"])
+    def list_rules():
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT r.id, r.keyword, r.category_id, c.name as category_name, "
+            "r.match_count, r.correction_count, r.is_seeded, r.created_at "
+            "FROM category_rules r LEFT JOIN categories c ON r.category_id = c.id "
+            "ORDER BY r.keyword"
+        ).fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            entry = dict(row)
+            entry["confidence"] = compute_confidence(row["match_count"], row["correction_count"])
+            result.append(entry)
+        return jsonify(result)
+
+    @app.route("/api/rules/<int:rule_id>", methods=["PUT"])
+    def update_rule(rule_id):
+        data = request.get_json(silent=True)
+        if data is None or "category_id" not in data:
+            return jsonify({"error": "request body must include category_id"}), 400
+        conn = get_db()
+        try:
+            cursor = conn.execute(
+                "UPDATE category_rules SET category_id = ? WHERE id = ?",
+                (data["category_id"], rule_id),
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return jsonify({"error": "rule not found"}), 404
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
+    @app.route("/api/rules/<int:rule_id>", methods=["DELETE"])
+    def delete_rule(rule_id):
+        conn = get_db()
+        try:
+            cursor = conn.execute("DELETE FROM category_rules WHERE id = ?", (rule_id,))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return jsonify({"error": "rule not found"}), 404
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
 
     @app.route("/api/categories", methods=["GET"])
     def list_categories():

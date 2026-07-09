@@ -286,3 +286,13 @@ def test_confirm_import_sets_manually_corrected_flag(client, tmp_path):
     })
     response = client.post("/api/import/confirm")
     assert response.get_json() == {"imported": 1}
+
+
+def test_pending_list_includes_category_confidence(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+
+    rows = client.get("/api/pending").get_json()
+
+    assert rows[0]["category_confidence"] is not None
+    assert 0.0 <= rows[0]["category_confidence"] <= 1.0
