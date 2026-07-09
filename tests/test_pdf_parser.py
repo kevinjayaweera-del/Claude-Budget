@@ -88,6 +88,14 @@ def test_parse_line_ignores_cashback_overview_line():
     assert _parse_line("Stand Ihres Cashbacks per Rechnungsdatum 11.12.2025 CHF 81.81") is None
 
 
+def test_parse_line_ignores_saldovortrag_line():
+    # "Saldovortrag" (balance carried forward from the previous statement) is
+    # not a new booking — it must be skipped at parse time, not merely
+    # excluded-from-totals after import, so it never reaches the pending
+    # queue at all.
+    assert _parse_line("01.06.2026 Saldovortrag 368.70") is None
+
+
 def test_parse_pdf_returns_empty_list_for_blank_page(tmp_path):
     pdf_path = tmp_path / "blank.pdf"
     c = canvas.Canvas(str(pdf_path))
@@ -231,6 +239,21 @@ def test_parse_columned_row_returns_none_without_leading_date():
     row = [
         _word("Zusatzinfo", 102.0, 150.0, 360.0),
         _word("12.00", 592.9, 617.9, 360.0),
+    ]
+
+    assert _parse_columned_row(row, columns) is None
+
+
+def test_parse_columned_row_skips_saldovortrag_row():
+    # "Saldovortrag" is the credit-card statement's own opening-balance line
+    # (carried forward from the previous month), not a new booking — it must
+    # be skipped at parse time so it never reaches the pending queue, rather
+    # than being imported and merely excluded from totals afterwards.
+    columns = _find_columns([HEADER_ROW])
+    row = [
+        _word("01.06.2026", 56.7, 96.7, 300.0),
+        _word("Saldovortrag", 102.0, 160.0, 300.0),
+        _word("368.70", 592.9, 617.9, 300.0),
     ]
 
     assert _parse_columned_row(row, columns) is None
@@ -406,6 +429,45 @@ def test_parse_pdf_handles_plural_labels_and_year_less_dates(tmp_path):
     assert rows == [
         {"date": "2026-06-01", "description": "Migros Zuerich", "amount_cents": -6430, "currency": "CHF"},
         {"date": "2026-06-23", "description": "Restaurant Bern", "amount_cents": -1800, "currency": "CHF"},
+    ]
+
+
+def test_parse_pdf_excludes_saldovortrag_row(tmp_path):
+    # "Saldovortrag" is always the first line of a Cornercard statement — the
+    # balance carried forward from the previous month, not a new June
+    # expense. It must be dropped entirely at parse time, not merely
+    # recategorized, so it's never imported or counted at all.
+    pdf_path = tmp_path / "cornercard.pdf"
+    c = canvas.Canvas(str(pdf_path), pagesize=(950, 700))
+    c.setFont("Helvetica", 7)
+
+    c.drawString(50, 680, "CORNER BANCA SA CORNERCARD, VIA CANOVA 16, 6901 LUGANO, CH")
+    c.drawString(50, 665, "Lugano, 1. Juli 2026")
+
+    header_y = 650
+    c.drawString(50, header_y, "Datum")
+    c.drawString(150, header_y, "Buchungstext")
+    c.drawString(550, header_y, "Belastungen")
+    c.drawString(610, header_y, "CHF")
+    c.drawString(660, header_y, "Gutschriften")
+    c.drawString(720, header_y, "CHF")
+
+    row_y = 630
+    c.drawString(50, row_y, "01.06")
+    c.drawString(150, row_y, "Saldovortrag")
+    c.drawString(560, row_y, "368.70")
+
+    row_y = 610
+    c.drawString(50, row_y, "10.06")
+    c.drawString(150, row_y, "Migros Zuerich")
+    c.drawString(560, row_y, "64.30")
+
+    c.save()
+
+    rows = parse_pdf(pdf_path)
+
+    assert rows == [
+        {"date": "2026-06-10", "description": "Migros Zuerich", "amount_cents": -6430, "currency": "CHF"},
     ]
 
 

@@ -25,8 +25,12 @@ _PAYMENT_KEYWORDS = ("zahlung",)
 # cashback-balance summary printed near the end of every Swisscard
 # statement. It happens to contain both a date and a trailing amount (so it
 # matches DATE_RE/AMOUNT_RE like a real transaction), but it isn't a
-# booking — must not be imported as one.
-_NON_TRANSACTION_KEYWORDS = ("cashback",)
+# booking — must not be imported as one. "Saldovortrag" (the balance carried
+# forward from the previous statement, always the first line of a
+# Cornercard statement) is the same kind of non-booking summary line — it
+# must be skipped at parse time, not merely categorized/excluded after
+# import, so it's never counted or shown at all.
+_NON_TRANSACTION_KEYWORDS = ("cashback", "saldovortrag")
 
 # Column-aware parsing (word-position based). Used when a page exposes a
 # "Datum ... Belastung ... Gutschrift ..." table header (e.g. Swiss bank
@@ -209,6 +213,8 @@ def _parse_columned_row(row, columns, statement_period=None):
         w["text"] for w in row[1:] if w["x1"] <= columns["belastung"][0]
     ).strip()
     if not description:
+        return None
+    if any(keyword in description.lower() for keyword in _NON_TRANSACTION_KEYWORDS):
         return None
 
     magnitude = abs(_amount_to_cents(amount_word["text"]))
