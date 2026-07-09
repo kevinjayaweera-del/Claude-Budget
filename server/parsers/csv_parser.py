@@ -78,6 +78,13 @@ def parse_csv(file_path):
 
         rows = []
         for row in reader:
+            if not row[date_col].strip():
+                # A combined transaction (e.g. "Belastungen Dauerauftrag (2)")
+                # can be followed by recipient-breakdown rows that carry no
+                # date and no amount of their own — informational sub-detail,
+                # not a separate booking. Skip rather than treating it as a
+                # malformed transaction, so the rest of the file still imports.
+                continue
             if use_split_columns:
                 debit = row.get(debit_col, "").strip()
                 credit = row.get(credit_col, "").strip()

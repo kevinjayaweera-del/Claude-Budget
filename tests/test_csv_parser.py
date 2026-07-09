@@ -89,6 +89,33 @@ def test_parse_csv_split_columns_raises_when_row_has_neither_debit_nor_credit(tm
         parse_csv(csv_path)
 
 
+def test_parse_csv_skips_blank_date_detail_rows(tmp_path):
+    # A combined standing-order debit ("Belastungen Dauerauftrag (2)") can be
+    # followed by recipient-breakdown rows that have no date and no amount of
+    # their own (they're informational sub-detail, not separate bookings) —
+    # these must be silently skipped, not treated as a malformed transaction,
+    # so the rest of the file still imports.
+    csv_path = tmp_path / "statement.csv"
+    csv_path.write_text(
+        '"Datum";"Buchungstext";"Betrag Detail";"Belastung CHF";"Gutschrift CHF"\n'
+        '"25.06.2026";"Belastungen Dauerauftrag (2)";"";"922.60";""\n'
+        '"";"AMAG Leasing AG, Alte Steinhauserstrasse 12, 6330 Cham, CH";"622.60";"";""\n'
+        '"";"Swiss Life AG, General-Guisan-Quai 40, 8002 Zürich, CH";"300.00";"";""\n',
+        encoding="utf-8-sig",
+    )
+
+    rows = parse_csv(csv_path)
+
+    assert rows == [
+        {
+            "date": "2026-06-25",
+            "description": "Belastungen Dauerauftrag (2)",
+            "amount_cents": -92260,
+            "currency": "CHF",
+        },
+    ]
+
+
 def test_parse_csv_prefers_single_amount_column_when_both_forms_present(tmp_path):
     # If a file somehow has both a plain "Betrag" column and Belastung/
     # Gutschrift columns, the simpler single-column form takes priority so
