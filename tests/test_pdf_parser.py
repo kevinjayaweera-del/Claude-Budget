@@ -74,6 +74,16 @@ def test_parse_line_respects_explicit_sign_when_present():
     assert _parse_line("01.03.2026 Lohn Maerz +5200.00")["amount_cents"] == 520000
 
 
+def test_parse_line_ignores_cashback_overview_line():
+    # "Stand Ihres Cashbacks per Rechnungsdatum 11.12.2025 CHF 81.81" is a
+    # summary line printed near the end of every Swisscard statement — it
+    # happens to contain both a date and a trailing amount, so it looks
+    # like a transaction to the regex, but it's a running cashback balance,
+    # not a booking, and must not be imported as one.
+    assert _parse_line("StandIhresCashbacksperRechnungsdatum 11.12.2025 CHF 81.81") is None
+    assert _parse_line("Stand Ihres Cashbacks per Rechnungsdatum 11.12.2025 CHF 81.81") is None
+
+
 def test_parse_pdf_returns_empty_list_for_blank_page(tmp_path):
     pdf_path = tmp_path / "blank.pdf"
     c = canvas.Canvas(str(pdf_path))

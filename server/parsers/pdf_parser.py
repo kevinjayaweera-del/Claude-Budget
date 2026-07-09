@@ -19,6 +19,13 @@ AMOUNT_RE = re.compile(r"([+-]?\d{1,3}(?:['’]?\d{3})*[.,]\d{2})\s*$")
 # statement format ever includes one, always overrides this default.
 _PAYMENT_KEYWORDS = ("zahlung",)
 
+# "Stand Ihres Cashbacks per Rechnungsdatum 11.12.2025 CHF 81.81" — a running
+# cashback-balance summary printed near the end of every Swisscard
+# statement. It happens to contain both a date and a trailing amount (so it
+# matches DATE_RE/AMOUNT_RE like a real transaction), but it isn't a
+# booking — must not be imported as one.
+_NON_TRANSACTION_KEYWORDS = ("cashback",)
+
 # Column-aware parsing (word-position based). Used when a page exposes a
 # "Datum ... Belastung ... Gutschrift ..." table header (e.g. Swiss bank
 # statements like ZKB), where the same-line "last number" is the running
@@ -44,6 +51,8 @@ def _amount_to_cents(value):
 
 
 def _parse_line(line):
+    if any(keyword in line.lower() for keyword in _NON_TRANSACTION_KEYWORDS):
+        return None
     date_match = DATE_RE.search(line)
     amount_match = AMOUNT_RE.search(line)
     if not date_match or not amount_match:
