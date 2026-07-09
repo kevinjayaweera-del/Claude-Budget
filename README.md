@@ -32,8 +32,9 @@ Dashboard öffnen: http://127.0.0.1:5000/
 
 ## Navigation
 
-Links steht eine feste Seitenleiste mit vier Bereichen: **Übersicht**
-(Dashboard mit Buchungen, Filtern und Import), **Budget** (Kennzahlen,
+Links steht eine feste Seitenleiste mit fünf Bereichen: **Übersicht**
+(Dashboard mit Buchungen und Filtern), **Import** (neue Kontoauszüge
+scannen und die Korrektur-Tabelle bestätigen), **Budget** (Kennzahlen,
 Diagramme und Budgetlimiten pro Kategorie), **Regeln** (gelernte
 Kategorisierungs-Regeln verwalten) und **Einstellungen** (Kategorien,
 Automatisierung, Datenverwaltung, Darstellung). Auf schmalen Bildschirmen
@@ -43,10 +44,11 @@ klappt die Seitenleiste automatisch zu einer schmalen Icon-Leiste zusammen.
 
 1. Neue Kontoauszüge (PDF/CSV) nach `statements/` kopieren (Unterordner pro
    Bank/Konto sind erlaubt, z.B. `statements/ZKB/`).
-2. Im Dashboard auf "Neue Dateien importieren" klicken.
+2. Unter "Import" (Seitenleiste) auf "Neue Dateien importieren" klicken.
 3. Erkannte Buchungen in der Korrektur-Tabelle prüfen und Kategorie/Betrag/
    Datum bei Bedarf anpassen.
-4. "Import bestätigen" klicken — Buchungen erscheinen im Dashboard.
+4. "Import bestätigen" klicken — Buchungen erscheinen im Dashboard
+   ("Übersicht").
 
 ## Lernfähige Kategorisierung
 

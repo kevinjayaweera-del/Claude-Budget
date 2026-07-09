@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <script>
+    (function () {
+      var theme = localStorage.getItem("theme");
+      if (theme === "light" || theme === "dark") {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budget Tracker — Import</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+  <nav class="sidebar" id="sidebar" data-active="import"></nav>
+  <div class="page">
+
+    <header class="app-header">
+      <p class="app-title">Import</p>
+      <button id="scan-btn" class="btn btn-primary" type="button">Neue Dateien importieren</button>
+    </header>
+
+    <p id="scan-status" class="scan-status hidden" role="status"></p>
+
+    <section id="pending-section" class="hidden">
+      <div class="section-head">
+        <p class="section-title">Zu prüfende Buchungen</p>
+      </div>
+      <p class="review-note">Bitte Kategorie, Betrag und Datum prüfen, bevor du den Import bestätigst.</p>
+      <p id="pending-auto-note" class="review-note hidden"></p>
+      <div id="pending-ledger" class="ledger">
+        <table id="pending-table">
+          <thead>
+            <tr><th>Datum</th><th>Beschreibung</th><th class="num">Betrag</th><th>Kategorie</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pending-actions">
+        <button id="confirm-btn" class="btn btn-primary" type="button">Import bestätigen</button>
+      </div>
+    </section>
+
+    <p id="import-empty-state" class="panel-empty">
+      Noch keine Buchungen zur Prüfung. Lege neue Kontoauszüge (PDF/CSV) in
+      <code>statements/</code> ab und klicke auf "Neue Dateien importieren".
+    </p>
+
+  </div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script src="/import.js"></script>
+</body>
+</html>

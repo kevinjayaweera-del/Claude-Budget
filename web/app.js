@@ -1,14 +1,4 @@
 let categories = [];
-let autoAcceptedPendingIds = [];
-
-// Rows the categorizer is this confident about don't need a manual look.
-// They're still kept in pending_transactions (not silently moved
-// server-side) so nothing here changes what "Import bestätigen" ultimately
-// does or how learning treats it; they're just not rendered in the review
-// table, and ridden along when the user confirms the batch. Loaded from
-// /api/settings (Einstellungen → Automatische Kategorisierung) — 0.75 is
-// just the fallback before that fetch resolves.
-let AUTO_ACCEPT_THRESHOLD = 0.75;
 
 const CATEGORY_COLORS = {
   "Lebensmittel": "var(--cat-lebensmittel)",
@@ -64,7 +54,6 @@ function applyDefaultDateRange(days) {
 
 async function loadAppSettings() {
   const settings = await fetch("/api/settings").then((r) => r.json());
-  AUTO_ACCEPT_THRESHOLD = settings.confidence_threshold;
   applyDefaultDateRange(settings.default_date_range_days);
 }
 
@@ -236,162 +225,9 @@ async function refreshDashboard() {
 
 document.getElementById("apply-filters-btn").addEventListener("click", refreshDashboard);
 
-async function loadPending() {
-  const res = await fetch("/api/pending");
-  const rows = await res.json();
-  const section = document.getElementById("pending-section");
-  const ledger = document.getElementById("pending-ledger");
-  const autoNote = document.getElementById("pending-auto-note");
-  const tbody = document.querySelector("#pending-table tbody");
-  tbody.innerHTML = "";
-  autoAcceptedPendingIds = [];
-
-  if (rows.length === 0) {
-    section.classList.add("hidden");
-    return;
-  }
-  section.classList.remove("hidden");
-
-  const reviewRows = [];
-  rows.forEach((row) => {
-    const confidence = row.category_confidence;
-    const isConfident = confidence !== null && confidence !== undefined && confidence >= AUTO_ACCEPT_THRESHOLD;
-    if (isConfident) {
-      autoAcceptedPendingIds.push(row.id);
-      return;
-    }
-    reviewRows.push(row);
-  });
-
-  if (autoAcceptedPendingIds.length > 0) {
-    autoNote.textContent =
-      `${autoAcceptedPendingIds.length} Buchung(en) mit hoher Konfidenz werden ohne Prüfung übernommen, ` +
-      "sobald du den Import bestätigst.";
-    autoNote.classList.remove("hidden");
-  } else {
-    autoNote.classList.add("hidden");
-  }
-
-  ledger.classList.toggle("hidden", reviewRows.length === 0);
-
-  reviewRows.forEach((row) => {
-    const tr = document.createElement("tr");
-    tr.dataset.id = row.id;
-    tr.dataset.currency = row.currency;
-    const categoryOptions = categories
-      .map((c) => `<option value="${c.id}" ${c.id === row.category_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
-      .join("");
-    const currencyTag = row.currency && row.currency !== "CHF"
-      ? `<span class="currency-tag">${escapeHtml(row.currency)}</span>`
-      : "";
-    const confidence = row.category_confidence;
-    let confidenceBadge = "";
-    if (confidence !== null && confidence !== undefined) {
-      const level = confidence >= AUTO_ACCEPT_THRESHOLD ? "high" : "low";
-      const title = `${Math.round(confidence * 100)}% Konfidenz`;
-      confidenceBadge = `<span class="confidence-dot ${level}" title="${title}"></span>`;
-    }
-    tr.innerHTML = `
-      <td><input type="date" value="${escapeHtml(row.date)}" data-field="date"></td>
-      <td><input type="text" value="${escapeHtml(row.description)}" data-field="description"></td>
-      <td class="amount-cell">
-        <input type="number" step="0.01" value="${(row.amount_cents / 100).toFixed(2)}" data-field="amount">${currencyTag}
-      </td>
-      <td><select data-field="category_id">${categoryOptions}</select>${confidenceBadge}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
-
-async function savePendingRow(tr) {
-  const id = tr.dataset.id;
-  const date = tr.querySelector('[data-field="date"]').value;
-  const description = tr.querySelector('[data-field="description"]').value;
-  const amount = parseFloat(tr.querySelector('[data-field="amount"]').value);
-  const categoryId = parseInt(tr.querySelector('[data-field="category_id"]').value, 10);
-  const currency = tr.dataset.currency;
-
-  if (Number.isNaN(amount) || Number.isNaN(categoryId)) {
-    alert(`Ungültiger Betrag oder keine Kategorie in Zeile für "${description}" — bitte korrigieren.`);
-    return false;
-  }
-
-  const res = await fetch(`/api/pending/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      date,
-      description,
-      amount_cents: Math.round(amount * 100),
-      currency,
-      category_id: categoryId,
-    }),
-  });
-
-  if (!res.ok) {
-    alert("Fehler beim Speichern — bitte erneut versuchen.");
-    return false;
-  }
-  return true;
-}
-
-function showScanStatus(newPending, duplicatesSkipped) {
-  const status = document.getElementById("scan-status");
-  if (newPending === 0 && duplicatesSkipped === 0) {
-    status.textContent = "Keine neuen Dateien gefunden.";
-  } else if (newPending === 0 && duplicatesSkipped > 0) {
-    status.textContent = `Alle ${duplicatesSkipped} gefundenen Buchungen sind bereits vorhanden — keine neuen Buchungen.`;
-  } else if (duplicatesSkipped > 0) {
-    status.textContent = `${duplicatesSkipped} Dopplungen übersprungen, ${newPending} neue Buchungen zur Prüfung.`;
-  } else {
-    status.textContent = `${newPending} neue Buchungen zur Prüfung.`;
-  }
-  status.classList.remove("hidden");
-}
-
-document.getElementById("scan-btn").addEventListener("click", async () => {
-  const res = await fetch("/api/scan", { method: "POST" });
-  if (!res.ok) {
-    alert("Fehler beim Scannen — bitte erneut versuchen.");
-    return;
-  }
-  const result = await res.json();
-  showScanStatus(result.new_pending, result.duplicates_skipped);
-  await loadPending();
-});
-
-document.getElementById("confirm-btn").addEventListener("click", async () => {
-  const rows = document.querySelectorAll("#pending-table tbody tr");
-  let allSaved = true;
-  const ids = [...autoAcceptedPendingIds];
-  for (const tr of rows) {
-    const saved = await savePendingRow(tr);
-    if (!saved) {
-      allSaved = false;
-    }
-    ids.push(parseInt(tr.dataset.id, 10));
-  }
-  if (!allSaved) {
-    alert("Einige Zeilen konnten nicht gespeichert werden — Import abgebrochen.");
-    return;
-  }
-  const res = await fetch("/api/import/confirm", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids }),
-  });
-  if (!res.ok) {
-    alert("Fehler beim Importieren — bitte erneut versuchen.");
-    return;
-  }
-  await loadPending();
-  await refreshDashboard();
-});
-
 (async function init() {
   await loadAppSettings();
   await loadCategories();
   await loadSources();
-  await loadPending();
   await refreshDashboard();
 })();
