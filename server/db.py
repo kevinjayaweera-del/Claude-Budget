@@ -94,6 +94,28 @@ DEFAULT_CATEGORY_RULES = [
     ("kuhn back & gastro", "Restaurants/Ausgang"),
     ("autogrill", "Restaurants/Ausgang"),
     ("* eats", "Restaurants/Ausgang"),
+    # Well-known fast-food/café chains — a curated starter list so common
+    # chains are recognized on first encounter instead of needing a manual
+    # correction each time (see docs/superpowers chat context: "Subway" and
+    # "Steiner Flughafebeck" were the motivating examples). "mcdonald" and
+    # "domino" are deliberately the bare brand stem, not the full name, so
+    # they match both "McDonald's"/"McDonalds" and "Domino's"/"Dominos"
+    # spelling variants (normalize_description doesn't strip apostrophes).
+    ("subway", "Restaurants/Ausgang"),
+    ("mcdonald", "Restaurants/Ausgang"),
+    ("burger king", "Restaurants/Ausgang"),
+    ("kfc", "Restaurants/Ausgang"),
+    ("starbucks", "Restaurants/Ausgang"),
+    ("dunkin", "Restaurants/Ausgang"),
+    ("domino", "Restaurants/Ausgang"),
+    ("manora", "Restaurants/Ausgang"),
+    ("vapiano", "Restaurants/Ausgang"),
+    ("nordsee", "Restaurants/Ausgang"),
+    # Real vendor from Kevin's own statements: a bakery/food counter at the
+    # airport — food bought there is eating-out, not grocery shopping, so
+    # it's mapped here rather than under the generic "bäckerei" keyword
+    # (Lebensmittel) below.
+    ("steiner flughafebeck", "Restaurants/Ausgang"),
     # Transport (checked before generic "twint" below due to length)
     ("sbb", "Transport"),
     ("sbb mobile", "Transport"),

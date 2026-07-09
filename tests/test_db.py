@@ -90,6 +90,30 @@ def test_default_category_rules_prefer_merchant_over_generic_twint_keyword(tmp_p
     conn.close()
 
 
+def test_default_category_rules_recognize_common_fast_food_and_cafe_chains(tmp_path):
+    # Well-known chains a first-time import should already get right without
+    # manual correction — including two real vendors from Kevin's own
+    # statements that were previously landing in "Unkategorisiert".
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        return conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()["name"]
+
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Subway Ruemlang 0000") == "Restaurants/Ausgang"
+    assert category_name(
+        "Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Steiner Flughafebeck AG"
+    ) == "Restaurants/Ausgang"
+    assert category_name("MCDONALDS ZUERICH HB") == "Restaurants/Ausgang"
+    assert category_name("STARBUCKS COFFEE BASEL") == "Restaurants/Ausgang"
+    assert category_name("BURGER KING WINTERTHUR") == "Restaurants/Ausgang"
+    assert category_name("MANORA ZUERICH") == "Restaurants/Ausgang"
+    conn.close()
+
+
 def test_init_db_adds_learning_columns_to_category_rules(tmp_path):
     conn = init_db(tmp_path / "test.db")
 
