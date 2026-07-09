@@ -95,9 +95,9 @@ body {
 }
 
 .page {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 2.5rem 2rem 5rem;
+  width: 100%;
+  margin: 0;
+  padding: 2.5rem clamp(1rem, 2.5vw, 2.5rem) 5rem;
 }
 
 .tabular { font-variant-numeric: tabular-nums; }
@@ -435,6 +435,13 @@ td.amount.debit { color: var(--debit); }
   color: var(--ink-soft);
   margin: 0 0 0.9rem;
 }
+#pending-table {
+  table-layout: fixed;
+}
+#pending-table th:nth-child(1), #pending-table td:nth-child(1) { width: 11%; }
+#pending-table th:nth-child(2), #pending-table td:nth-child(2) { width: 48%; }
+#pending-table th:nth-child(3), #pending-table td:nth-child(3) { width: 15%; }
+#pending-table th:nth-child(4), #pending-table td:nth-child(4) { width: 26%; }
 #pending-table input[type="date"],
 #pending-table input[type="text"],
 #pending-table input[type="number"],

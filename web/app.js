@@ -281,7 +281,6 @@ async function loadPending() {
         <input type="number" step="0.01" value="${(row.amount_cents / 100).toFixed(2)}" data-field="amount">${currencyTag}
       </td>
       <td><select data-field="category_id">${categoryOptions}</select>${confidenceBadge}</td>
-      <td><button type="button" class="btn-danger" data-action="delete">Löschen</button></td>
     `;
     tbody.appendChild(tr);
   });
@@ -370,18 +369,6 @@ document.getElementById("confirm-btn").addEventListener("click", async () => {
   }
   await loadPending();
   await refreshDashboard();
-});
-
-document.querySelector("#pending-table tbody").addEventListener("click", async (event) => {
-  if (event.target.dataset.action === "delete") {
-    const tr = event.target.closest("tr");
-    const res = await fetch(`/api/pending/${tr.dataset.id}`, { method: "DELETE" });
-    if (!res.ok) {
-      alert("Fehler beim Löschen — bitte erneut versuchen.");
-      return;
-    }
-    tr.remove();
-  }
 });
 
 document.getElementById("reset-db-btn").addEventListener("click", async () => {
