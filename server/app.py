@@ -34,6 +34,10 @@ def _fetch_filtered_transactions(conn, args):
     if args.get("source"):
         query += " AND t.source = ?"
         params.append(args["source"])
+    if args.get("type") == "income":
+        query += " AND t.amount_cents > 0"
+    elif args.get("type") == "expense":
+        query += " AND t.amount_cents < 0"
     if args.get("q"):
         query += " AND t.description LIKE ?"
         params.append(f"%{args['q']}%")

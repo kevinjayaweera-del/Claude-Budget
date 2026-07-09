@@ -74,6 +74,7 @@ function buildQuery() {
   const end = document.getElementById("filter-end").value;
   const categoryId = document.getElementById("filter-category").value;
   const source = document.getElementById("filter-source").value;
+  const type = document.getElementById("filter-type").value;
   const minAmount = document.getElementById("filter-min-amount").value;
   const maxAmount = document.getElementById("filter-max-amount").value;
   const search = document.getElementById("filter-search").value;
@@ -81,6 +82,7 @@ function buildQuery() {
   if (end) params.set("end", end);
   if (categoryId) params.set("category_id", categoryId);
   if (source) params.set("source", source);
+  if (type) params.set("type", type);
   if (minAmount) params.set("min_amount", minAmount);
   if (maxAmount) params.set("max_amount", maxAmount);
   if (search) params.set("q", search);

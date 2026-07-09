@@ -69,6 +69,14 @@
         <label class="field-label" for="filter-source">Konto/Quelle</label>
         <select id="filter-source"><option value="">Alle Konten</option></select>
       </div>
+      <div class="field">
+        <label class="field-label" for="filter-type">Typ</label>
+        <select id="filter-type">
+          <option value="">Einnahmen &amp; Ausgaben</option>
+          <option value="income">Nur Einnahmen</option>
+          <option value="expense">Nur Ausgaben</option>
+        </select>
+      </div>
       <div class="field amount">
         <label class="field-label" for="filter-min-amount">Betrag von</label>
         <input id="filter-min-amount" type="number" step="0.01" placeholder="-500">

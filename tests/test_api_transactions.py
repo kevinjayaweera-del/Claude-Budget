@@ -59,6 +59,27 @@ def test_sources_endpoint_lists_distinct_sources(client_with_data):
     assert sources == ["test"]
 
 
+def test_transactions_filtered_by_type_income(client_with_data):
+    rows = client_with_data.get("/api/transactions?type=income").get_json()
+
+    assert len(rows) == 1
+    assert rows[0]["description"] == "Lohn April"
+
+
+def test_transactions_filtered_by_type_expense(client_with_data):
+    rows = client_with_data.get("/api/transactions?type=expense").get_json()
+
+    descriptions = {r["description"] for r in rows}
+    assert descriptions == {"Musterladen Zürich", "Beispielmarkt Zürich"}
+
+
+def test_summary_respects_type_filter(client_with_data):
+    summary = client_with_data.get("/api/summary?type=expense").get_json()
+
+    assert summary["total_income"] == 0
+    assert summary["total_expense"] == -7590
+
+
 def test_summary_totals_and_by_month(client_with_data):
     summary = client_with_data.get("/api/summary").get_json()
 
