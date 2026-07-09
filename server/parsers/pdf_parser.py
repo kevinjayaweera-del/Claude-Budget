@@ -1,7 +1,9 @@
+import io
 import re
 from decimal import Decimal
 
 import pdfplumber
+import pypdf
 
 # Legacy single-amount-column heuristic (line-based). Used as a fallback for
 # PDF layouts that don't expose separate Belastung/Gutschrift (debit/credit)
@@ -32,15 +34,65 @@ _NON_TRANSACTION_KEYWORDS = ("cashback",)
 # Saldo, not the transaction amount — the real amount only shows up in the
 # Belastung (debit) or Gutschrift (credit) column, identified by its
 # horizontal position, not its order in the extracted text.
-WORD_DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
+WORD_DATE_RE = re.compile(r"^\d{2}\.\d{2}(?:\.\d{4})?$")
 WORD_AMOUNT_RE = re.compile(r"^[+-]?\d{1,3}(?:['’]?\d{3})*[.,]\d{2}$")
 ROW_TOLERANCE = 3  # points; words within this vertical distance count as one row
 COLUMN_PADDING = 5  # points; slack added around a header label's x-range
 
+# Cornercard prints transaction dates as "DD.MM" with no year at all — the
+# year has to be inferred from the statement's own issue date line
+# ("Lugano, 1. Juli 2026"). A transaction in the same month (or earlier)
+# as the issue month belongs to the issue year; a later month means it's
+# from the year before (e.g. a December transaction on a January statement).
+_GERMAN_MONTHS = {
+    "januar": 1, "februar": 2, "märz": 3, "marz": 3, "april": 4, "mai": 5,
+    "juni": 6, "juli": 7, "august": 8, "september": 9, "oktober": 10,
+    "november": 11, "dezember": 12,
+}
+_STATEMENT_DATE_RE = re.compile(r"Lugano,\s*\d{1,2}\.\s*(\w+)\s*(\d{4})")
 
-def _to_iso_date(value):
-    day, month, year = value.split(".")
+# Some PDF exports (seen from Cornercard) write their encryption/crypt-filter
+# dictionary with entries as indirect references instead of resolved dicts —
+# a known pdfminer.six limitation (github.com/pdfminer/pdfminer.six#1140-ish),
+# not real content protection: the user password is empty. pdfplumber.open()
+# raises a TypeError deep inside pdfminer for these files; pypdf handles the
+# same structure fine, so it's used as a decrypt-and-reserialize fallback —
+# only when the normal path fails, so already-working files (ZKB, Swisscard)
+# never touch this code path.
+
+
+def _to_iso_date(value, statement_period=None):
+    parts = value.split(".")
+    if len(parts) == 3:
+        day, month, year = parts
+    else:
+        day, month = parts
+        statement_month, statement_year = statement_period
+        year = str(statement_year if int(month) <= statement_month else statement_year - 1)
     return f"{year}-{month}-{day}"
+
+
+def _extract_statement_month_year(text):
+    match = _STATEMENT_DATE_RE.search(text)
+    if not match:
+        return None
+    month = _GERMAN_MONTHS.get(match.group(1).lower())
+    if month is None:
+        return None
+    return month, int(match.group(2))
+
+
+def _decrypt_pdf_bytes(file_path):
+    reader = pypdf.PdfReader(str(file_path))
+    if reader.is_encrypted:
+        reader.decrypt("")
+    writer = pypdf.PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    buffer.seek(0)
+    return buffer
 
 
 def _amount_to_cents(value):
@@ -96,19 +148,26 @@ def _group_words_into_rows(words):
     return rows
 
 
+_DEBIT_LABELS = ("Belastung", "Belastungen")
+_CREDIT_LABELS = ("Gutschrift", "Gutschriften")
+
+
 def _find_columns(rows):
-    """Locate a header row with Datum/Belastung/Gutschrift labels and return
-    their x-ranges, or None if this page has no such header."""
+    """Locate a header row with Datum/Belastung(en)/Gutschrift(en) labels and
+    return their x-ranges, or None if this page has no such header. Accepts
+    both singular (ZKB) and plural (Cornercard) label spellings."""
     for row in rows:
         labels = {word["text"].rstrip(":"): word for word in row}
-        if not ({"Datum", "Belastung", "Gutschrift"} <= labels.keys()):
+        debit_label = next((label for label in _DEBIT_LABELS if label in labels), None)
+        credit_label = next((label for label in _CREDIT_LABELS if label in labels), None)
+        if "Datum" not in labels or debit_label is None or credit_label is None:
             continue
 
         datum_x0 = labels["Datum"]["x0"]
-        belastung_x0 = labels["Belastung"]["x0"]
-        belastung_x1 = labels["Belastung"]["x1"]
-        gutschrift_x0 = labels["Gutschrift"]["x0"]
-        gutschrift_x1 = labels["Gutschrift"]["x1"]
+        belastung_x0 = labels[debit_label]["x0"]
+        belastung_x1 = labels[debit_label]["x1"]
+        gutschrift_x0 = labels[credit_label]["x0"]
+        gutschrift_x1 = labels[credit_label]["x1"]
 
         # "Belastung"/"Gutschrift" are immediately followed by a "CHF" word;
         # fold it into the column's right edge so amounts under "CHF" match.
@@ -131,7 +190,7 @@ def _amount_in_range(word, x_range):
     return lo <= word["x0"] and word["x1"] <= hi and WORD_AMOUNT_RE.match(word["text"])
 
 
-def _parse_columned_row(row, columns):
+def _parse_columned_row(row, columns, statement_period=None):
     if not row:
         return None
     first = row[0]
@@ -155,18 +214,29 @@ def _parse_columned_row(row, columns):
     magnitude = abs(_amount_to_cents(amount_word["text"]))
 
     return {
-        "date": _to_iso_date(first["text"]),
+        "date": _to_iso_date(first["text"], statement_period),
         "description": description,
         "amount_cents": -magnitude if debit is not None else magnitude,
         "currency": "CHF",
     }
 
 
+def _open_pdf(file_path):
+    try:
+        return pdfplumber.open(file_path)
+    except Exception:
+        return pdfplumber.open(_decrypt_pdf_bytes(file_path))
+
+
 def parse_pdf(file_path):
     rows = []
     columns = None
-    with pdfplumber.open(file_path) as pdf:
+    statement_period = None
+    with _open_pdf(file_path) as pdf:
         for page in pdf.pages:
+            if statement_period is None:
+                statement_period = _extract_statement_month_year(page.extract_text() or "")
+
             words = page.extract_words()
             if not words:
                 continue
@@ -178,7 +248,7 @@ def parse_pdf(file_path):
 
             if columns:
                 for row in page_rows:
-                    parsed = _parse_columned_row(row, columns)
+                    parsed = _parse_columned_row(row, columns, statement_period)
                     if parsed:
                         rows.append(parsed)
             else:

@@ -208,8 +208,12 @@ DEFAULT_CATEGORY_RULES = [
     ("ihrezahlung", "Kreditkarten-Ausgleich"),
     ("swisscard aecs", "Kreditkarten-Ausgleich"),
     ("corner banca", "Kreditkarten-Ausgleich"),
+    # "Saldovortrag" (balance carried forward) is the credit-card statement's
+    # own opening-balance line — the mirror image of "Ihre Zahlung" above.
+    # Both represent last month's already-counted balance, not a new
+    # expense/income this month, so both are excluded from totals.
+    ("saldovortrag", "Kreditkarten-Ausgleich"),
     # Sonstiges — unclear small vendors, kept out of real spending categories
-    ("saldovortrag", "Sonstiges"),
     ("ubs - zahlungen div", "Sonstiges"),
     ("corporate benefits", "Sonstiges"),
     ("marko switzerland", "Sonstiges"),
@@ -277,6 +281,13 @@ def init_db(db_path):
     conn.execute(
         "UPDATE category_rules SET category_id = ? "
         "WHERE keyword = 'ihre zahlung' AND category_id = ?",
+        (kreditkarten_ausgleich_id, sonstiges_id),
+    )
+    # Same one-off retarget for "saldovortrag", seeded under Sonstiges before
+    # the credit-card-settlement exclusion existed for it too.
+    conn.execute(
+        "UPDATE category_rules SET category_id = ? "
+        "WHERE keyword = 'saldovortrag' AND category_id = ?",
         (kreditkarten_ausgleich_id, sonstiges_id),
     )
     conn.commit()

@@ -332,6 +332,45 @@ def test_init_db_migrates_ihre_zahlung_away_from_sonstiges(tmp_path):
     conn.close()
 
 
+def test_default_category_rules_treat_saldovortrag_as_credit_card_settlement(tmp_path):
+    # "Saldovortrag" (balance carried forward from the previous statement) is
+    # the credit-card statement's own opening-balance line, not a new June
+    # expense — it and "Ihre Zahlung" are the two halves of last month's
+    # already-counted balance, and must be excluded from totals the same way.
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    category_id, _, _ = categorizer.predict("Saldovortrag")
+    name = conn.execute("SELECT name FROM categories WHERE id = ?", (category_id,)).fetchone()["name"]
+    assert name == "Kreditkarten-Ausgleich"
+    conn.close()
+
+
+def test_init_db_migrates_saldovortrag_away_from_sonstiges(tmp_path):
+    # A database created before this fix existed has "saldovortrag" seeded
+    # under "Sonstiges" — must be retargeted on the next init_db() call.
+    db_path = tmp_path / "test.db"
+    old_conn = init_db(db_path)
+    sonstiges_id = old_conn.execute(
+        "SELECT id FROM categories WHERE name = 'Sonstiges'"
+    ).fetchone()["id"]
+    old_conn.execute(
+        "UPDATE category_rules SET category_id = ? WHERE keyword = 'saldovortrag'",
+        (sonstiges_id,),
+    )
+    old_conn.commit()
+    old_conn.close()
+
+    conn = init_db(db_path)
+
+    row = conn.execute(
+        "SELECT c.name FROM category_rules r JOIN categories c ON r.category_id = c.id "
+        "WHERE r.keyword = 'saldovortrag'"
+    ).fetchone()
+    assert row["name"] == "Kreditkarten-Ausgleich"
+    conn.close()
+
+
 def test_init_db_seeds_default_settings(tmp_path):
     conn = init_db(tmp_path / "test.db")
 

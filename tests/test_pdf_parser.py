@@ -1,3 +1,5 @@
+import io
+
 from reportlab.pdfgen import canvas
 
 from server.parsers.pdf_parser import (
@@ -6,6 +8,8 @@ from server.parsers.pdf_parser import (
     _find_columns,
     _parse_columned_row,
     _group_words_into_rows,
+    _to_iso_date,
+    _extract_statement_month_year,
 )
 
 
@@ -300,4 +304,137 @@ def test_parse_pdf_uses_column_layout_for_belastung_gutschrift_statement(tmp_pat
         {"date": "2026-06-01", "description": "Migros Zuerich", "amount_cents": -6430, "currency": "CHF"},
         {"date": "2026-06-03", "description": "Lohn Juni", "amount_cents": 520000, "currency": "CHF"},
         {"date": "2026-06-05", "description": "Restaurant Zuerich", "amount_cents": -2350, "currency": "CHF"},
+    ]
+
+
+# --- Cornercard support: plural column labels, year-less short dates,
+# encrypted (empty-password) PDFs pdfminer/pdfplumber can't open directly ---
+
+def test_to_iso_date_uses_full_date_when_year_present():
+    assert _to_iso_date("01.06.2026") == "2026-06-01"
+
+
+def test_to_iso_date_infers_year_from_statement_period_same_month_or_earlier():
+    # Statement issued in July 2026 — a June transaction belongs to 2026.
+    assert _to_iso_date("01.06", statement_period=(7, 2026)) == "2026-06-01"
+
+
+def test_to_iso_date_infers_previous_year_when_transaction_month_after_statement_month():
+    # Statement issued in January 2026 — a December transaction is from 2025
+    # (statement covers the rollover from the previous year).
+    assert _to_iso_date("15.12", statement_period=(1, 2026)) == "2025-12-15"
+
+
+def test_extract_statement_month_year_parses_lugano_issue_date():
+    text = "CORNER BANCA SA CORNERCARD\nLugano, 1. Juli 2026\nweitere Zeilen"
+    assert _extract_statement_month_year(text) == (7, 2026)
+
+
+def test_extract_statement_month_year_returns_none_without_match():
+    assert _extract_statement_month_year("Kontoauszug ohne Datum") is None
+
+
+HEADER_ROW_PLURAL = [
+    _word("Datum", 56.7, 82.0, 225.7),
+    _word("Belastungen", 563.7, 610.0, 225.7),
+    _word("CHF", 612.2, 626.9, 225.7),
+    _word("Gutschriften", 634.5, 681.7, 225.7),
+    _word("CHF", 684.1, 698.7, 225.7),
+]
+
+
+def test_find_columns_accepts_plural_belastungen_gutschriften_labels():
+    columns = _find_columns([HEADER_ROW_PLURAL])
+
+    assert columns is not None
+    assert columns["datum_x0"] == 56.7
+    lo, hi = columns["belastung"]
+    assert lo < 563.7 and hi > 626.9
+    lo, hi = columns["gutschrift"]
+    assert lo < 634.5 and hi > 698.7
+
+
+def test_parse_columned_row_uses_statement_period_for_short_dates():
+    columns = _find_columns([HEADER_ROW_PLURAL])
+    row = [
+        _word("01.06", 56.7, 86.7, 300.0),
+        _word("Migros", 102.0, 130.0, 300.0),
+        _word("Zuerich", 132.0, 160.0, 300.0),
+        _word("64.30", 592.9, 617.9, 300.0),
+    ]
+
+    result = _parse_columned_row(row, columns, statement_period=(7, 2026))
+
+    assert result == {
+        "date": "2026-06-01",
+        "description": "Migros Zuerich",
+        "amount_cents": -6430,
+        "currency": "CHF",
+    }
+
+
+def test_parse_pdf_handles_plural_labels_and_year_less_dates(tmp_path):
+    pdf_path = tmp_path / "cornercard.pdf"
+    c = canvas.Canvas(str(pdf_path), pagesize=(950, 700))
+    c.setFont("Helvetica", 7)
+
+    c.drawString(50, 680, "CORNER BANCA SA CORNERCARD, VIA CANOVA 16, 6901 LUGANO, CH")
+    c.drawString(50, 665, "Lugano, 1. Juli 2026")
+
+    header_y = 650
+    c.drawString(50, header_y, "Datum")
+    c.drawString(150, header_y, "Buchungstext")
+    c.drawString(550, header_y, "Belastungen")
+    c.drawString(610, header_y, "CHF")
+    c.drawString(660, header_y, "Gutschriften")
+    c.drawString(720, header_y, "CHF")
+
+    row_y = 630
+    c.drawString(50, row_y, "01.06")
+    c.drawString(150, row_y, "Migros Zuerich")
+    c.drawString(560, row_y, "64.30")
+
+    row_y = 610
+    c.drawString(50, row_y, "23.06")
+    c.drawString(150, row_y, "Restaurant Bern")
+    c.drawString(560, row_y, "18.00")
+
+    c.save()
+
+    rows = parse_pdf(pdf_path)
+
+    assert rows == [
+        {"date": "2026-06-01", "description": "Migros Zuerich", "amount_cents": -6430, "currency": "CHF"},
+        {"date": "2026-06-23", "description": "Restaurant Bern", "amount_cents": -1800, "currency": "CHF"},
+    ]
+
+
+def test_parse_pdf_falls_back_to_pypdf_decrypt_when_pdfplumber_open_fails(tmp_path, monkeypatch):
+    # Simulates the real-world Cornercard bug: pdfplumber.open() raises for
+    # an empty-password-"encrypted" PDF (a pdfminer.six crypt-filter
+    # limitation), but the file itself is perfectly readable once decrypted
+    # and reserialized via pypdf. Here we force that failure path via
+    # monkeypatching (the actual pdfminer bug isn't easily reproducible with
+    # a synthetic PDF) and verify parse_pdf recovers via the pypdf fallback.
+    pdf_path = tmp_path / "statement.pdf"
+    c = canvas.Canvas(str(pdf_path))
+    c.drawString(50, 800, "Kontoauszug März 2026")
+    c.drawString(50, 780, "01.03.2026 Migros Zuerich -45.90")
+    c.save()
+
+    import pdfplumber as pdfplumber_module
+
+    real_open = pdfplumber_module.open
+
+    def flaky_open(target, *args, **kwargs):
+        if isinstance(target, io.BytesIO):
+            return real_open(target, *args, **kwargs)
+        raise TypeError("'PDFObjRef' object is not subscriptable")
+
+    monkeypatch.setattr(pdfplumber_module, "open", flaky_open)
+
+    rows = parse_pdf(pdf_path)
+
+    assert rows == [
+        {"date": "2026-03-01", "description": "Migros Zuerich", "amount_cents": -4590, "currency": "CHF"},
     ]
