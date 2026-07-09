@@ -151,15 +151,34 @@ def register_routes(app):
             rows = conn.execute("SELECT * FROM pending_transactions").fetchall()
         categorizer = RuleBasedCategorizer(conn)
         for row in rows:
+            final_category_id = row["category_id"]
+            suggested_category_id = row["suggested_category_id"]
+            suggested_rule_id = row["suggested_rule_id"]
+            manually_corrected = 1 if final_category_id != suggested_category_id else 0
+
+            if suggested_rule_id is not None:
+                if manually_corrected:
+                    conn.execute(
+                        "UPDATE category_rules SET correction_count = correction_count + 1 WHERE id = ?",
+                        (suggested_rule_id,),
+                    )
+                    if final_category_id is not None:
+                        categorizer.learn(row["description"], final_category_id, was_correction=True)
+                else:
+                    conn.execute(
+                        "UPDATE category_rules SET match_count = match_count + 1 WHERE id = ?",
+                        (suggested_rule_id,),
+                    )
+            elif final_category_id is not None:
+                categorizer.learn(row["description"], final_category_id, was_correction=False)
+
             conn.execute(
                 "INSERT INTO transactions "
                 "(date, description, amount_cents, currency, category_id, source, file_id, manually_corrected) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (row["date"], row["description"], row["amount_cents"], row["currency"],
-                 row["category_id"], row["source"], row["file_id"], 0),
+                 final_category_id, row["source"], row["file_id"], manually_corrected),
             )
-            if row["category_id"] is not None:
-                categorizer.learn(row["description"], row["category_id"])
         if ids:
             placeholders = ",".join("?" for _ in ids)
             conn.execute(f"DELETE FROM pending_transactions WHERE id IN ({placeholders})", ids)

@@ -1,6 +1,7 @@
 import pytest
 
 from server.app import create_app
+from server.db import get_connection
 
 
 @pytest.fixture
@@ -212,3 +213,76 @@ def test_confirm_import_with_explicit_ids_only_imports_selected_rows(client, tmp
     remaining_pending = client.get("/api/pending").get_json()
     assert len(remaining_pending) == 1
     assert remaining_pending[0]["id"] == second_id
+
+
+def _rule_stats(db_path):
+    conn = get_connection(db_path)
+    rows = conn.execute("SELECT keyword, match_count, correction_count FROM category_rules").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def test_confirm_import_reinforces_rule_when_suggestion_accepted(client, tmp_path):
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    migros_before = next(r for r in _rule_stats(tmp_path / "test.db") if r["keyword"] == "migros")
+
+    client.post("/api/import/confirm")  # accept the suggested category as-is
+
+    migros_after = next(r for r in _rule_stats(tmp_path / "test.db") if r["keyword"] == "migros")
+    assert migros_after["match_count"] == migros_before["match_count"] + 1
+    assert migros_after["correction_count"] == migros_before["correction_count"]
+
+    transactions = client.get("/api/transactions").get_json()
+    assert transactions[0]["description"] == "Migros Zürich"
+
+
+def test_confirm_import_penalizes_old_rule_and_learns_new_one_on_correction(client, tmp_path):
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    pending = client.get("/api/pending").get_json()[0]
+    categories = {c["name"]: c["id"] for c in client.get("/api/categories").get_json()}
+    migros_before = next(r for r in _rule_stats(tmp_path / "test.db") if r["keyword"] == "migros")
+
+    # Correct the auto-suggested "Lebensmittel" to something else.
+    client.put(f"/api/pending/{pending['id']}", json={
+        "date": pending["date"],
+        "description": pending["description"],
+        "amount_cents": pending["amount_cents"],
+        "currency": pending["currency"],
+        "category_id": categories["Sonstiges"],
+    })
+    client.post("/api/import/confirm")
+
+    migros_after = next(r for r in _rule_stats(tmp_path / "test.db") if r["keyword"] == "migros")
+    assert migros_after["correction_count"] == migros_before["correction_count"] + 1
+    assert migros_after["match_count"] == migros_before["match_count"]  # unchanged, not rewarded
+
+    transactions = client.get("/api/transactions").get_json()
+    assert transactions[0]["category_id"] == categories["Sonstiges"]
+
+
+def test_confirm_import_sets_manually_corrected_flag(client, tmp_path):
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    pending = client.get("/api/pending").get_json()[0]
+    categories = {c["name"]: c["id"] for c in client.get("/api/categories").get_json()}
+
+    client.put(f"/api/pending/{pending['id']}", json={
+        "date": pending["date"],
+        "description": pending["description"],
+        "amount_cents": pending["amount_cents"],
+        "currency": pending["currency"],
+        "category_id": categories["Sonstiges"],
+    })
+    response = client.post("/api/import/confirm")
+    assert response.get_json() == {"imported": 1}
