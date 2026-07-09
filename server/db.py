@@ -309,3 +309,17 @@ def reset_db(db_path):
     conn.commit()
     conn.close()
     return init_db(db_path)
+
+
+def reset_imported_data(db_path):
+    """Wipe only what an import produced (transactions, pending rows,
+    imported-file records) so statements can be rescanned from scratch —
+    unlike reset_db(), this leaves categories, learned/seeded rules,
+    budgets and settings untouched. Meant for repeatedly re-testing imports
+    without losing the categorization the user has already trained."""
+    conn = get_connection(db_path)
+    conn.execute("DELETE FROM transactions")
+    conn.execute("DELETE FROM pending_transactions")
+    conn.execute("DELETE FROM imported_files")
+    conn.commit()
+    return conn

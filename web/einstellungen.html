@@ -123,6 +123,22 @@
       <div class="panel panel-danger">
         <div class="settings-row">
           <div class="settings-row-text">
+            <p class="settings-row-label">Alle importierten Buchungen löschen</p>
+            <p class="settings-row-hint">Entfernt alle Buchungen, offenen Prüfungen und Importe — zum wiederholten Testen des Imports. Kategorien, gelernte Regeln, Budgets und Einstellungen bleiben erhalten.</p>
+          </div>
+        </div>
+        <label class="settings-checkbox-row">
+          <input type="checkbox" id="reset-imports-backup" checked>
+          Backup vor dem Löschen erstellen
+        </label>
+        <div class="pending-actions">
+          <button id="reset-imports-btn" class="btn btn-danger" type="button">Alle importierten Buchungen löschen</button>
+        </div>
+      </div>
+
+      <div class="panel panel-danger">
+        <div class="settings-row">
+          <div class="settings-row-text">
             <p class="settings-row-label">Gesamte Datenbank löschen</p>
             <p class="settings-row-hint">Entfernt alle Buchungen, Importe und gelernten Regeln unwiderruflich und lädt die Standardkategorien neu.</p>
           </div>

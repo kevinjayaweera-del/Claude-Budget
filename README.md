@@ -82,7 +82,10 @@ verwalten:
 - **Automatische Kategorisierung**: ein-/ausschalten, Mindest-Konfidenz für
   die automatische Übernahme einstellen, Link zur Regel-Verwaltung.
 - **Datenverwaltung**: gefiltert löschen (Zeitraum/Kategorie/Konto/Typ, mit
-  optionalem Backup vorher) oder die gesamte Datenbank zurücksetzen.
+  optionalem Backup vorher), alle importierten Buchungen löschen (zum
+  wiederholten Testen des Imports — Kategorien, gelernte Regeln, Budgets
+  und Einstellungen bleiben erhalten) oder die gesamte Datenbank
+  zurücksetzen.
 - **Import & Export**: alle Daten als JSON exportieren. Import/
   Wiederherstellung ist als spätere Erweiterung vorgesehen.
 - **Dashboard**: Standardzeitraum, der beim Öffnen automatisch vorausgewählt wird.

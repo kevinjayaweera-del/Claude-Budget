@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 from flask import Flask, abort, current_app, jsonify, request, send_from_directory
 
-from server.db import get_connection, init_db, reset_db
+from server.db import get_connection, init_db, reset_db, reset_imported_data
 from server.import_service import scan_and_parse
 from server.categorize import RuleBasedCategorizer, compute_confidence
 
@@ -135,6 +135,17 @@ def register_routes(app):
         if request.args.get("backup") == "true":
             _backup_database(current_app.config["DB_PATH"])
         reset_db(current_app.config["DB_PATH"]).close()
+        return jsonify({"ok": True})
+
+    @app.route("/api/database/reset-imports", methods=["POST"])
+    def reset_imports():
+        # Test-import convenience: wipes only transactions/pending rows/
+        # imported-file records so statements can be rescanned from
+        # scratch, but — unlike /api/database/reset — keeps categories,
+        # learned rules, budgets and settings intact.
+        if request.args.get("backup") == "true":
+            _backup_database(current_app.config["DB_PATH"])
+        reset_imported_data(current_app.config["DB_PATH"]).close()
         return jsonify({"ok": True})
 
     @app.route("/api/scan", methods=["POST"])

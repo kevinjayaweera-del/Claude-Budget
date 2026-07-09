@@ -204,6 +204,21 @@ document.getElementById("delete-filtered-btn").addEventListener("click", async (
   await loadSettings();
 });
 
+document.getElementById("reset-imports-btn").addEventListener("click", async () => {
+  const confirmed = confirm(
+    "Wirklich alle importierten Buchungen löschen? Kategorien, gelernte Regeln, " +
+    "Budgets und Einstellungen bleiben erhalten. Dies kann nicht rückgängig gemacht werden."
+  );
+  if (!confirmed) return;
+  const backup = document.getElementById("reset-imports-backup").checked;
+  const res = await fetch(`/api/database/reset-imports${backup ? "?backup=true" : ""}`, { method: "POST" });
+  if (!res.ok) {
+    alert("Fehler beim Zurücksetzen — bitte erneut versuchen.");
+    return;
+  }
+  window.location.reload();
+});
+
 document.getElementById("reset-all-btn").addEventListener("click", async () => {
   const confirmed = confirm(
     "Wirklich die gesamte Datenbank löschen? Alle Buchungen, Importe und gelernten " +

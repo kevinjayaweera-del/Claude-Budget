@@ -1,6 +1,6 @@
 import sqlite3
 
-from server.db import init_db, reset_db, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_RULES
+from server.db import init_db, reset_db, reset_imported_data, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_RULES
 from server.categorize import RuleBasedCategorizer
 
 
@@ -264,6 +264,77 @@ def test_reset_db_clears_budgets(tmp_path):
     conn = reset_db(db_path)
 
     assert conn.execute("SELECT COUNT(*) c FROM budgets").fetchone()["c"] == 0
+    conn.close()
+
+
+def test_reset_imported_data_clears_transactions_pending_and_imported_files(tmp_path):
+    # A "clean slate for testing" reset: wipes only what an import produced
+    # (transactions, pending rows, imported-file records) so statements can
+    # be rescanned from scratch — but unlike reset_db(), leaves everything
+    # the user configured/learned (categories, rules, budgets, settings)
+    # untouched.
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    lebensmittel_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Lebensmittel'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO imported_files (hash, filename, source, imported_at) "
+        "VALUES ('abc', 'test.csv', 'test', datetime('now'))"
+    )
+    conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, category_id, source, manually_corrected) "
+        "VALUES ('2026-03-01', 'Testausgabe', -1000, 'CHF', ?, 'test', 0)",
+        (lebensmittel_id,),
+    )
+    conn.execute(
+        "INSERT INTO pending_transactions (date, description, amount_cents, currency, category_id, source) "
+        "VALUES ('2026-03-02', 'Noch offen', -500, 'CHF', ?, 'test')",
+        (lebensmittel_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    conn = reset_imported_data(db_path)
+
+    assert conn.execute("SELECT COUNT(*) c FROM transactions").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM pending_transactions").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM imported_files").fetchone()["c"] == 0
+    conn.close()
+
+
+def test_reset_imported_data_keeps_learned_rules_categories_budgets_and_settings(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    lebensmittel_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Lebensmittel'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO category_rules (keyword, category_id, match_count, correction_count, is_seeded, created_at) "
+        "VALUES ('gelernteregel', ?, 5, 0, 0, datetime('now'))",
+        (lebensmittel_id,),
+    )
+    conn.execute("INSERT INTO categories (name) VALUES ('Haustier')")
+    conn.execute(
+        "INSERT INTO budgets (category_id, monthly_limit_cents) VALUES (?, 50000)",
+        (lebensmittel_id,),
+    )
+    conn.execute("UPDATE settings SET value = 'false' WHERE key = 'auto_categorize_enabled'")
+    conn.commit()
+    conn.close()
+
+    conn = reset_imported_data(db_path)
+
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM category_rules WHERE keyword = 'gelernteregel'"
+    ).fetchone()["c"] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM categories WHERE name = 'Haustier'"
+    ).fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM budgets").fetchone()["c"] == 1
+    assert conn.execute(
+        "SELECT value FROM settings WHERE key = 'auto_categorize_enabled'"
+    ).fetchone()["value"] == "false"
     conn.close()
 
 
