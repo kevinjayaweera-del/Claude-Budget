@@ -39,6 +39,16 @@ Dashboard öffnen: http://127.0.0.1:5000/
    bei Bedarf anpassen oder Fehlzeilen löschen.
 4. "Import bestätigen" klicken — Buchungen erscheinen im Dashboard.
 
+## Lernfähige Kategorisierung
+
+Jede bestätigte Kategorie-Zuordnung verbessert künftige Importe: wird ein
+automatischer Vorschlag unverändert bestätigt, steigt seine Konfidenz;
+wird er korrigiert, sinkt sie und eine neue Regel für die richtige
+Kategorie wird gelernt. In der Korrektur-Tabelle zeigt ein grüner Punkt
+neben der Kategorie "sicher" (≥75% Konfidenz), ein gelber Punkt "bitte
+prüfen". Unter "Regeln verwalten" (Link im Dashboard-Header) lassen sich
+alle Regeln einsehen, umlenken oder löschen.
+
 ## Tests ausführen
 
 ```bash

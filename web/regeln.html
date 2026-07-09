@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budget Tracker — Regeln</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="page">
+
+    <header class="app-header">
+      <p class="app-title">Kategorisierungs-Regeln</p>
+      <a href="/index.html" class="btn btn-ghost">Zurück zum Dashboard</a>
+    </header>
+
+    <p class="review-note">
+      Regeln entstehen automatisch, wenn du beim Bestätigen eines Imports
+      eine Kategorie zuweist oder korrigierst. Hier kannst du eine Regel
+      umlenken oder löschen — neue Regeln legst du nicht direkt an.
+    </p>
+
+    <div class="ledger">
+      <table id="rules-table">
+        <thead>
+          <tr>
+            <th>Keyword</th>
+            <th>Kategorie</th>
+            <th class="num">Konfidenz</th>
+            <th class="num">Treffer</th>
+            <th class="num">Korrekturen</th>
+            <th>Herkunft</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <script src="/regeln.js"></script>
+</body>
+</html>
