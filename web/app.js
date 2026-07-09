@@ -1,4 +1,13 @@
 let categories = [];
+let autoAcceptedPendingIds = [];
+
+// Rows the categorizer is this confident about don't need a manual look —
+// matches server/categorize.py's CONFIDENCE_THRESHOLD. They're still kept
+// in pending_transactions (not silently moved server-side) so nothing here
+// changes what "Import bestätigen" ultimately does or how learning treats
+// it; they're just not rendered in the review table, and ridden along when
+// the user confirms the batch.
+const AUTO_ACCEPT_THRESHOLD = 0.75;
 
 const CATEGORY_COLORS = {
   "Lebensmittel": "var(--cat-lebensmittel)",
@@ -214,8 +223,11 @@ async function loadPending() {
   const res = await fetch("/api/pending");
   const rows = await res.json();
   const section = document.getElementById("pending-section");
+  const ledger = document.getElementById("pending-ledger");
+  const autoNote = document.getElementById("pending-auto-note");
   const tbody = document.querySelector("#pending-table tbody");
   tbody.innerHTML = "";
+  autoAcceptedPendingIds = [];
 
   if (rows.length === 0) {
     section.classList.add("hidden");
@@ -223,7 +235,29 @@ async function loadPending() {
   }
   section.classList.remove("hidden");
 
+  const reviewRows = [];
   rows.forEach((row) => {
+    const confidence = row.category_confidence;
+    const isConfident = confidence !== null && confidence !== undefined && confidence >= AUTO_ACCEPT_THRESHOLD;
+    if (isConfident) {
+      autoAcceptedPendingIds.push(row.id);
+      return;
+    }
+    reviewRows.push(row);
+  });
+
+  if (autoAcceptedPendingIds.length > 0) {
+    autoNote.textContent =
+      `${autoAcceptedPendingIds.length} Buchung(en) mit hoher Konfidenz werden ohne Prüfung übernommen, ` +
+      "sobald du den Import bestätigst.";
+    autoNote.classList.remove("hidden");
+  } else {
+    autoNote.classList.add("hidden");
+  }
+
+  ledger.classList.toggle("hidden", reviewRows.length === 0);
+
+  reviewRows.forEach((row) => {
     const tr = document.createElement("tr");
     tr.dataset.id = row.id;
     tr.dataset.currency = row.currency;
@@ -236,7 +270,7 @@ async function loadPending() {
     const confidence = row.category_confidence;
     let confidenceBadge = "";
     if (confidence !== null && confidence !== undefined) {
-      const level = confidence >= 0.75 ? "high" : "low";
+      const level = confidence >= AUTO_ACCEPT_THRESHOLD ? "high" : "low";
       const title = `${Math.round(confidence * 100)}% Konfidenz`;
       confidenceBadge = `<span class="confidence-dot ${level}" title="${title}"></span>`;
     }
@@ -313,7 +347,7 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
 document.getElementById("confirm-btn").addEventListener("click", async () => {
   const rows = document.querySelectorAll("#pending-table tbody tr");
   let allSaved = true;
-  const ids = [];
+  const ids = [...autoAcceptedPendingIds];
   for (const tr of rows) {
     const saved = await savePendingRow(tr);
     if (!saved) {
