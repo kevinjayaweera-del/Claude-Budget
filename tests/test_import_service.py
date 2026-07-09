@@ -18,6 +18,7 @@ def test_scan_and_parse_creates_pending_rows_and_marks_file_imported(tmp_path):
     assert len(pending) == 1
     assert pending[0]["description"] == "Migros Zürich"
     assert pending[0]["amount_cents"] == -4590
+    assert pending[0]["suggested_category_id"] == pending[0]["category_id"]
 
     files = conn.execute("SELECT * FROM imported_files").fetchall()
     assert len(files) == 1

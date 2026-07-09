@@ -4,7 +4,7 @@ from pathlib import Path
 from server.file_hash import hash_file
 from server.parsers.csv_parser import parse_csv
 from server.parsers.pdf_parser import parse_pdf
-from server.categorize import categorize
+from server.categorize import RuleBasedCategorizer
 
 
 def _existing_counts(conn, keys):
@@ -38,6 +38,7 @@ def scan_and_parse(conn, statements_dir):
     statements_dir = Path(statements_dir)
     created = 0
     duplicates_skipped = 0
+    categorizer = RuleBasedCategorizer(conn)
 
     for path in sorted(statements_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in (".csv", ".pdf"):
@@ -88,13 +89,17 @@ def scan_and_parse(conn, statements_dir):
                     file_duplicates += 1
                     continue
 
-                category_id = categorize(row["description"], conn)
+                category_id, confidence, rule_id = categorizer.predict(
+                    row["description"], row["amount_cents"], row["currency"], source
+                )
                 conn.execute(
                     "INSERT INTO pending_transactions "
-                    "(date, description, amount_cents, currency, category_id, source, file_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "(date, description, amount_cents, currency, category_id, source, file_id, "
+                    " suggested_category_id, suggested_rule_id, category_confidence) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (row["date"], row["description"], row["amount_cents"],
-                     row["currency"], category_id, source, file_id),
+                     row["currency"], category_id, source, file_id,
+                     category_id, rule_id, confidence if rule_id is not None else None),
                 )
                 file_created += 1
         except Exception as exc:

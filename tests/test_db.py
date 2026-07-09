@@ -1,7 +1,7 @@
 import sqlite3
 
 from server.db import init_db, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_RULES
-from server.categorize import categorize
+from server.categorize import RuleBasedCategorizer
 
 
 def test_init_db_creates_tables(tmp_path):
@@ -74,9 +74,10 @@ def test_default_category_rules_prefer_merchant_over_generic_twint_keyword(tmp_p
     # transfer catch-all, which only wins when no more specific keyword
     # matches (categorize() prefers the longest matching keyword).
     conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
 
     def category_name(description):
-        category_id = categorize(description, conn)
+        category_id, _, _ = categorizer.predict(description)
         return conn.execute(
             "SELECT name FROM categories WHERE id = ?", (category_id,)
         ).fetchone()["name"]

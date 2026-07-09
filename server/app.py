@@ -5,7 +5,7 @@ from flask import Flask, abort, current_app, jsonify, request, send_from_directo
 
 from server.db import get_connection, init_db
 from server.import_service import scan_and_parse
-from server.categorize import learn_rule
+from server.categorize import RuleBasedCategorizer
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
@@ -149,6 +149,7 @@ def register_routes(app):
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM pending_transactions").fetchall()
+        categorizer = RuleBasedCategorizer(conn)
         for row in rows:
             conn.execute(
                 "INSERT INTO transactions "
@@ -158,7 +159,7 @@ def register_routes(app):
                  row["category_id"], row["source"], row["file_id"], 0),
             )
             if row["category_id"] is not None:
-                learn_rule(conn, row["description"], row["category_id"])
+                categorizer.learn(row["description"], row["category_id"])
         if ids:
             placeholders = ",".join("?" for _ in ids)
             conn.execute(f"DELETE FROM pending_transactions WHERE id IN ({placeholders})", ids)
