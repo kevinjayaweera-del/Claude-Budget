@@ -63,7 +63,15 @@ MIGRATIONS = [
     ("pending_transactions", "suggested_category_id", "INTEGER REFERENCES categories(id)"),
     ("pending_transactions", "suggested_rule_id", "INTEGER REFERENCES category_rules(id)"),
     ("pending_transactions", "category_confidence", "REAL"),
+    ("categories", "excluded_from_totals", "INTEGER NOT NULL DEFAULT 0"),
 ]
+
+# Categories seeded with excluded_from_totals=1 — money movement that isn't
+# real income/spending (e.g. paying off a credit card bill from the linked
+# checking account). Re-asserted idempotently on every init_db() call, since
+# there's no UI to toggle this per-category; it's a fixed property of what
+# the category represents, not a per-transaction user choice.
+CATEGORIES_EXCLUDED_FROM_TOTALS = {"Kreditkarten-Ausgleich"}
 
 # Derived from Kevin's real ZKB bank statements (CSV/PDF) and Swisscard/
 # Cornercard credit card statements — see docs/superpowers/specs for the
@@ -73,7 +81,7 @@ DEFAULT_CATEGORIES = [
     "Lebensmittel", "Restaurants/Ausgang", "Transport", "Reisen",
     "Miete/Wohnen", "Versicherungen", "Gesundheit", "Shopping", "Abos",
     "Freizeit", "Bargeldbezug", "Privatüberweisungen", "Sparen/Anlegen",
-    "Lohn/Einkommen", "Sonstiges", "Unkategorisiert",
+    "Lohn/Einkommen", "Sonstiges", "Kreditkarten-Ausgleich", "Unkategorisiert",
 ]
 
 # (keyword, category_name) — keyword must be lowercase (categorize() matches
@@ -170,9 +178,23 @@ DEFAULT_CATEGORY_RULES = [
     ("bezug zkb visa debit card", "Bargeldbezug"),
     # Sparen/Anlegen
     ("findependent", "Sparen/Anlegen"),
-    # Sonstiges — card-bill settlements and unclear small vendors, kept out
-    # of real spending categories
-    ("ihre zahlung", "Sonstiges"),
+    # Kreditkarten-Ausgleich — both sides of the "pay off the credit card
+    # bill from the checking account" event: the credit-card statement's own
+    # payment-received line ("Ihre Zahlung – Besten Dank", a credit) and the
+    # checking account's matching collection debit (identified by the card
+    # issuer's legal name as it appears on the ZKB statement). Excluded from
+    # totals (see categories.excluded_from_totals) because the money already
+    # counted once, either way, when the individual card transactions
+    # themselves were imported — counting this too would double it.
+    ("ihre zahlung", "Kreditkarten-Ausgleich"),
+    # Some PDF exports merge "IHRE"/"ZAHLUNG" into one word with no space
+    # (a pdfplumber word-extraction quirk on that specific statement layout)
+    # — kept as a separate keyword rather than loosening to bare "zahlung",
+    # which would false-positive on "Zahlungszweck"/"Ratenzahlung"/etc.
+    ("ihrezahlung", "Kreditkarten-Ausgleich"),
+    ("swisscard aecs", "Kreditkarten-Ausgleich"),
+    ("corner banca", "Kreditkarten-Ausgleich"),
+    # Sonstiges — unclear small vendors, kept out of real spending categories
     ("saldovortrag", "Sonstiges"),
     ("ubs - zahlungen div", "Sonstiges"),
     ("corporate benefits", "Sonstiges"),
@@ -208,6 +230,10 @@ def init_db(db_path):
     _apply_migrations(conn)
     for name in DEFAULT_CATEGORIES:
         conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (name,))
+    for name in CATEGORIES_EXCLUDED_FROM_TOTALS:
+        conn.execute(
+            "UPDATE categories SET excluded_from_totals = 1 WHERE name = ?", (name,)
+        )
     for keyword, category_name in DEFAULT_CATEGORY_RULES:
         category_id = conn.execute(
             "SELECT id FROM categories WHERE name = ?", (category_name,)
@@ -218,6 +244,25 @@ def init_db(db_path):
             "VALUES (?, ?, 3, 0, 1, datetime('now'))",
             (keyword, category_id),
         )
+    # One-off retarget for a pre-existing database where "ihre zahlung" was
+    # already seeded under its old category (Sonstiges), before this
+    # exclude-from-totals fix existed. Deliberately NOT a generic
+    # "resync every seeded rule to its DEFAULT_CATEGORY_RULES category"
+    # mechanism: is_seeded is never cleared when a rule is retargeted via
+    # PUT /api/rules/<id> (see update_rule), so a generic version would
+    # silently undo any manual re-categorization Kevin makes through
+    # "Regeln verwalten" on every restart.
+    kreditkarten_ausgleich_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Kreditkarten-Ausgleich'"
+    ).fetchone()["id"]
+    sonstiges_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Sonstiges'"
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE category_rules SET category_id = ? "
+        "WHERE keyword = 'ihre zahlung' AND category_id = ?",
+        (kreditkarten_ausgleich_id, sonstiges_id),
+    )
     conn.commit()
     return conn
 

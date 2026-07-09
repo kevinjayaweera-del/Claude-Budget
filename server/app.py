@@ -18,7 +18,8 @@ def get_db():
 def _fetch_filtered_transactions(conn, args):
     query = (
         "SELECT t.id, t.date, t.description, t.amount_cents, t.currency, "
-        "t.category_id, c.name as category_name, t.source "
+        "t.category_id, c.name as category_name, t.source, "
+        "COALESCE(c.excluded_from_totals, 0) as excluded_from_totals "
         "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id WHERE 1=1"
     )
     params = []
@@ -328,10 +329,20 @@ def register_routes(app):
             return jsonify({"total_income": 0, "total_expense": 0, "by_category": [], "by_month": []})
 
         df = pd.DataFrame([dict(r) for r in rows])
-        total_income = int(df[df.amount_cents > 0]["amount_cents"].sum())
-        total_expense = int(df[df.amount_cents < 0]["amount_cents"].sum())
+        df["month"] = df["date"].str.slice(0, 7)
+        # Categories like "Kreditkarten-Ausgleich" (paying off a credit card
+        # bill from the linked checking account) aren't real income/spending
+        # — the money was already counted once, on whichever side the
+        # individual transactions were imported from. Counting the
+        # settlement too would double it. The full transaction (both sides
+        # of it) is still returned by /api/transactions unfiltered, so the
+        # ledger itself stays a complete, reconcilable record.
+        counted = df[df.excluded_from_totals == 0]
 
-        expenses = df[df.amount_cents < 0].copy()
+        total_income = int(counted[counted.amount_cents > 0]["amount_cents"].sum())
+        total_expense = int(counted[counted.amount_cents < 0]["amount_cents"].sum())
+
+        expenses = counted[counted.amount_cents < 0].copy()
         by_category_list = []
         if not expenses.empty:
             grouped = expenses.groupby("category_id")["amount_cents"].sum().abs().reset_index()
@@ -340,8 +351,7 @@ def register_routes(app):
                 for row in grouped.itertuples()
             ]
 
-        df["month"] = df["date"].str.slice(0, 7)
-        by_month = df.groupby("month")["amount_cents"].sum().reset_index()
+        by_month = counted.groupby("month")["amount_cents"].sum().reset_index()
         by_month_list = [
             {"month": row.month, "amount_cents": int(row.amount_cents)}
             for row in by_month.itertuples()

@@ -240,6 +240,7 @@ async function loadCashflowTrend() {
   const rows = await fetch("/api/transactions").then((r) => r.json());
   const byMonth = {};
   rows.forEach((r) => {
+    if (r.excluded_from_totals) return; // e.g. Kreditkarten-Ausgleich — already counted once elsewhere
     const month = r.date.slice(0, 7);
     if (!byMonth[month]) byMonth[month] = { income: 0, expense: 0 };
     if (r.amount_cents > 0) {

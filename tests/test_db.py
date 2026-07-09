@@ -265,3 +265,68 @@ def test_reset_db_clears_budgets(tmp_path):
 
     assert conn.execute("SELECT COUNT(*) c FROM budgets").fetchone()["c"] == 0
     conn.close()
+
+
+def test_kreditkarten_ausgleich_category_is_excluded_from_totals(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+
+    row = conn.execute(
+        "SELECT excluded_from_totals FROM categories WHERE name = 'Kreditkarten-Ausgleich'"
+    ).fetchone()
+    assert row["excluded_from_totals"] == 1
+    conn.close()
+
+
+def test_other_categories_are_not_excluded_from_totals(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+
+    row = conn.execute(
+        "SELECT excluded_from_totals FROM categories WHERE name = 'Lebensmittel'"
+    ).fetchone()
+    assert row["excluded_from_totals"] == 0
+    conn.close()
+
+
+def test_default_category_rules_recognize_credit_card_settlement_lines(tmp_path):
+    # Both sides of "pay off the credit card bill from the checking
+    # account": the credit-card statement's own payment line, and the ZKB
+    # checking-account's matching collection debit for each issuer.
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        return conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()["name"]
+
+    assert category_name("Gutschrift TWINT: IHRE ZAHLUNG - BESTEN DANK") != "Sonstiges"
+    assert category_name("IHREZAHLUNG–BESTENDANK") == "Kreditkarten-Ausgleich"
+    assert category_name("Swisscard AECS GmbH, Postfach 227, 8810 Horgen, CH") == "Kreditkarten-Ausgleich"
+    assert category_name("Corner Banca SA Cornercard, Via Canova 16, 6901 Lugano, CH") == "Kreditkarten-Ausgleich"
+    conn.close()
+
+
+def test_init_db_migrates_ihre_zahlung_away_from_sonstiges(tmp_path):
+    # A database created before this fix existed has "ihre zahlung" seeded
+    # under "Sonstiges" — must be retargeted on the next init_db() call.
+    db_path = tmp_path / "test.db"
+    old_conn = init_db(db_path)
+    sonstiges_id = old_conn.execute(
+        "SELECT id FROM categories WHERE name = 'Sonstiges'"
+    ).fetchone()["id"]
+    old_conn.execute(
+        "UPDATE category_rules SET category_id = ? WHERE keyword = 'ihre zahlung'",
+        (sonstiges_id,),
+    )
+    old_conn.commit()
+    old_conn.close()
+
+    conn = init_db(db_path)
+
+    row = conn.execute(
+        "SELECT c.name FROM category_rules r JOIN categories c ON r.category_id = c.id "
+        "WHERE r.keyword = 'ihre zahlung'"
+    ).fetchone()
+    assert row["name"] == "Kreditkarten-Ausgleich"
+    conn.close()
