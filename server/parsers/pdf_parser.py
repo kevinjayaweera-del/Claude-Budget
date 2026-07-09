@@ -9,6 +9,16 @@ import pdfplumber
 DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
 AMOUNT_RE = re.compile(r"([+-]?\d{1,3}(?:['’]?\d{3})*[.,]\d{2})\s*$")
 
+# Real credit-card statements (Swisscard/Cornercard) parsed via this fallback
+# carry no per-line sign at all — every listed amount, purchase or payment
+# alike, is a bare positive number. An unsigned amount therefore defaults to
+# a debit (expense) here; the cardholder's own payment toward the balance
+# ("Ihre Zahlung – Besten Dank") is the one exception, detected by keyword —
+# the same "ihre zahlung" signal the categorizer already relies on (see
+# DEFAULT_CATEGORY_RULES in server/db.py). An explicit "+"/"-" sign, if a
+# statement format ever includes one, always overrides this default.
+_PAYMENT_KEYWORDS = ("zahlung",)
+
 # Column-aware parsing (word-position based). Used when a page exposes a
 # "Datum ... Belastung ... Gutschrift ..." table header (e.g. Swiss bank
 # statements like ZKB), where the same-line "last number" is the running
@@ -48,10 +58,17 @@ def _parse_line(line):
     if not description:
         return None
 
+    raw_amount = amount_match.group(1)
+    amount_cents = _amount_to_cents(raw_amount)
+    if raw_amount[0] not in "+-":
+        is_payment = any(keyword in description.lower() for keyword in _PAYMENT_KEYWORDS)
+        if not is_payment:
+            amount_cents = -amount_cents
+
     return {
         "date": _to_iso_date(date_match.group(1)),
         "description": description,
-        "amount_cents": _amount_to_cents(amount_match.group(1)),
+        "amount_cents": amount_cents,
         "currency": "CHF",
     }
 

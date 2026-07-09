@@ -40,6 +40,40 @@ def test_parse_line_returns_none_when_date_and_amount_overlap():
     assert _parse_line("Ref 01.03.2026.90") is None
 
 
+def test_parse_line_defaults_unsigned_amount_to_debit():
+    # Real credit-card statements (Swisscard/Cornercard) print every line —
+    # both purchases and the cardholder's own payment — as a bare, unsigned
+    # number; there is no per-line sign in the source text at all. A purchase
+    # must therefore default to a debit (negative/expense), not a credit.
+    result = _parse_line("22.05.2026 SPOTIFYCH,STOCKHOLM 22.50")
+    assert result == {
+        "date": "2026-05-22",
+        "description": "SPOTIFYCH,STOCKHOLM",
+        "amount_cents": -2250,
+        "currency": "CHF",
+    }
+
+
+def test_parse_line_treats_zahlung_as_credit():
+    # "Ihre Zahlung – Besten Dank" is the cardholder's own payment toward the
+    # card balance, printed with the same unsigned format as a purchase — it
+    # must be detected by keyword (matching the "ihre zahlung" categorization
+    # rule) and treated as a credit, not a debit.
+    result = _parse_line("29.05.2026 IHRE ZAHLUNG-BESTEN DANK 148.45")
+    assert result == {
+        "date": "2026-05-29",
+        "description": "IHRE ZAHLUNG-BESTEN DANK",
+        "amount_cents": 14845,
+        "currency": "CHF",
+    }
+
+
+def test_parse_line_respects_explicit_sign_when_present():
+    # If a line does carry an explicit sign, that always wins over the
+    # unsigned-defaults-to-debit convention above.
+    assert _parse_line("01.03.2026 Lohn Maerz +5200.00")["amount_cents"] == 520000
+
+
 def test_parse_pdf_returns_empty_list_for_blank_page(tmp_path):
     pdf_path = tmp_path / "blank.pdf"
     c = canvas.Canvas(str(pdf_path))
@@ -64,14 +98,16 @@ def test_parse_pdf_extracts_transactions_from_real_pdf(tmp_path):
     c = canvas.Canvas(str(pdf_path))
     c.drawString(50, 800, "Kontoauszug März 2026")
     c.drawString(50, 780, "01.03.2026 Migros Zuerich -45.90")
-    c.drawString(50, 760, "03.03.2026 Lohn Maerz 5200.00")
+    c.drawString(50, 760, "03.03.2026 Spotify Stockholm 22.50")
+    c.drawString(50, 740, "05.03.2026 Ihre Zahlung-Besten Dank 5200.00")
     c.save()
 
     rows = parse_pdf(pdf_path)
 
     assert rows == [
         {"date": "2026-03-01", "description": "Migros Zuerich", "amount_cents": -4590, "currency": "CHF"},
-        {"date": "2026-03-03", "description": "Lohn Maerz", "amount_cents": 520000, "currency": "CHF"},
+        {"date": "2026-03-03", "description": "Spotify Stockholm", "amount_cents": -2250, "currency": "CHF"},
+        {"date": "2026-03-05", "description": "Ihre Zahlung-Besten Dank", "amount_cents": 520000, "currency": "CHF"},
     ]
 
 
