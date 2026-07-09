@@ -3,6 +3,7 @@ const SIDEBAR_ICONS = {
   dashboard: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 10 3l7 6.5"/><path d="M5 8.5V17h10V8.5"/></svg>`,
   budget: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 3v7h7"/></svg>`,
   regeln: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="5" x2="16" y2="5"/><circle cx="8" cy="5" r="1.5" fill="currentColor" stroke="none"/><line x1="4" y1="10" x2="16" y2="10"/><circle cx="13" cy="10" r="1.5" fill="currentColor" stroke="none"/><line x1="4" y1="15" x2="16" y2="15"/><circle cx="10" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg>`,
+  settings: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.8v2.1M10 15.1v2.1M17.2 10h-2.1M4.9 10H2.8M15.1 4.9l-1.5 1.5M6.4 13.6l-1.5 1.5M15.1 15.1l-1.5-1.5M6.4 6.4 4.9 4.9"/></svg>`,
 };
 
 const SIDEBAR_LINKS = [
@@ -11,45 +12,33 @@ const SIDEBAR_LINKS = [
   { href: "/regeln.html", page: "regeln", label: "Regeln", icon: SIDEBAR_ICONS.regeln },
 ];
 
-function renderSidebar() {
-  const nav = document.getElementById("sidebar");
-  if (!nav) return;
-  const activePage = nav.dataset.active;
+const SIDEBAR_BOTTOM_LINKS = [
+  { href: "/einstellungen.html", page: "einstellungen", label: "Einstellungen", icon: SIDEBAR_ICONS.settings },
+];
 
-  const links = SIDEBAR_LINKS.map(
+function renderSidebarLinks(links, activePage) {
+  return links.map(
     (link) => `
       <a href="${link.href}" class="sidebar-link${link.page === activePage ? " active" : ""}">
         <span class="sidebar-icon">${link.icon}</span>
         <span class="sidebar-label">${link.label}</span>
       </a>`
   ).join("");
+}
+
+function renderSidebar() {
+  const nav = document.getElementById("sidebar");
+  if (!nav) return;
+  const activePage = nav.dataset.active;
 
   nav.innerHTML = `
     <div class="sidebar-brand">
       <span class="sidebar-brand-mark">${SIDEBAR_ICONS.brand}</span>
       <span class="sidebar-brand-name">Budget Tracker</span>
     </div>
-    <div class="sidebar-nav">${links}</div>
-    <div class="sidebar-footer">
-      <span class="sidebar-footer-label">Test-Werkzeug</span>
-      <button id="reset-db-btn" class="sidebar-reset-btn" type="button">Datenbank zurücksetzen</button>
-    </div>
+    <div class="sidebar-nav">${renderSidebarLinks(SIDEBAR_LINKS, activePage)}</div>
+    <div class="sidebar-nav sidebar-nav-bottom">${renderSidebarLinks(SIDEBAR_BOTTOM_LINKS, activePage)}</div>
   `;
-
-  document.getElementById("reset-db-btn").addEventListener("click", async () => {
-    const confirmed = confirm(
-      "Wirklich die gesamte Datenbank löschen? Alle Buchungen, Importe und gelernten " +
-      "Regeln werden entfernt und die Standardkategorien neu geladen. " +
-      "Dies kann nicht rückgängig gemacht werden."
-    );
-    if (!confirmed) return;
-    const res = await fetch("/api/database/reset", { method: "POST" });
-    if (!res.ok) {
-      alert("Fehler beim Zurücksetzen — bitte erneut versuchen.");
-      return;
-    }
-    window.location.reload();
-  });
 }
 
 renderSidebar();

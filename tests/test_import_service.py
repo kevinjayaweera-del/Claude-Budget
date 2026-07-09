@@ -190,3 +190,25 @@ def test_scan_and_parse_does_not_dedupe_across_different_amounts_or_dates(tmp_pa
     result = scan_and_parse(conn, statements_dir)
 
     assert result == {"created": 2, "duplicates_skipped": 0}
+
+
+def test_scan_and_parse_skips_categorization_when_disabled(tmp_path):
+    statements_dir = tmp_path / "statements"
+    statements_dir.mkdir()
+    (statements_dir / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    conn = init_db(tmp_path / "test.db")
+    conn.execute("UPDATE settings SET value = 'false' WHERE key = 'auto_categorize_enabled'")
+    conn.commit()
+
+    scan_and_parse(conn, statements_dir)
+
+    pending = conn.execute("SELECT * FROM pending_transactions").fetchone()
+    unkategorisiert_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Unkategorisiert'"
+    ).fetchone()["id"]
+    assert pending["category_id"] == unkategorisiert_id
+    assert pending["suggested_rule_id"] is None
+    assert pending["category_confidence"] is None

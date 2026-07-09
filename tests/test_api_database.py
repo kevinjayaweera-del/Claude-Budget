@@ -48,3 +48,13 @@ def test_reset_database_allows_rescanning_previously_imported_file(client, tmp_p
     result = client.post("/api/scan").get_json()
 
     assert result == {"new_pending": 1, "duplicates_skipped": 0}
+
+
+def test_reset_database_with_backup_creates_backup_file(client):
+    response = client.post("/api/database/reset?backup=true")
+
+    assert response.status_code == 200
+    db_path = client.application.config["DB_PATH"]
+    backup_dir = db_path.parent / "backups"
+    assert backup_dir.exists()
+    assert list(backup_dir.glob("*.db"))

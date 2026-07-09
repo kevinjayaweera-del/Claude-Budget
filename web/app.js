@@ -1,13 +1,14 @@
 let categories = [];
 let autoAcceptedPendingIds = [];
 
-// Rows the categorizer is this confident about don't need a manual look —
-// matches server/categorize.py's CONFIDENCE_THRESHOLD. They're still kept
-// in pending_transactions (not silently moved server-side) so nothing here
-// changes what "Import bestätigen" ultimately does or how learning treats
-// it; they're just not rendered in the review table, and ridden along when
-// the user confirms the batch.
-const AUTO_ACCEPT_THRESHOLD = 0.75;
+// Rows the categorizer is this confident about don't need a manual look.
+// They're still kept in pending_transactions (not silently moved
+// server-side) so nothing here changes what "Import bestätigen" ultimately
+// does or how learning treats it; they're just not rendered in the review
+// table, and ridden along when the user confirms the batch. Loaded from
+// /api/settings (Einstellungen → Automatische Kategorisierung) — 0.75 is
+// just the fallback before that fetch resolves.
+let AUTO_ACCEPT_THRESHOLD = 0.75;
 
 const CATEGORY_COLORS = {
   "Lebensmittel": "var(--cat-lebensmittel)",
@@ -49,6 +50,22 @@ async function loadCategories() {
     opt.textContent = c.name;
     select.appendChild(opt);
   });
+}
+
+function applyDefaultDateRange(days) {
+  if (!days) return;
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - days);
+  const toIso = (d) => d.toISOString().slice(0, 10);
+  document.getElementById("filter-start").value = toIso(start);
+  document.getElementById("filter-end").value = toIso(end);
+}
+
+async function loadAppSettings() {
+  const settings = await fetch("/api/settings").then((r) => r.json());
+  AUTO_ACCEPT_THRESHOLD = settings.confidence_threshold;
+  applyDefaultDateRange(settings.default_date_range_days);
 }
 
 async function loadSources() {
@@ -372,6 +389,7 @@ document.getElementById("confirm-btn").addEventListener("click", async () => {
 });
 
 (async function init() {
+  await loadAppSettings();
   await loadCategories();
   await loadSources();
   await loadPending();

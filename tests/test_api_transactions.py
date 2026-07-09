@@ -198,3 +198,56 @@ def test_transactions_still_lists_kreditkarten_ausgleich_rows(client_with_settle
     descriptions = {r["description"] for r in rows}
     assert "IHRE ZAHLUNG - BESTEN DANK" in descriptions
     assert "Swisscard AECS GmbH" in descriptions
+
+
+def test_delete_transactions_without_any_filter_returns_400(client_with_data):
+    response = client_with_data.delete("/api/transactions")
+
+    assert response.status_code == 400
+    assert len(client_with_data.get("/api/transactions").get_json()) == 3
+
+
+def test_delete_transactions_by_date_range(client_with_data):
+    response = client_with_data.delete("/api/transactions?start=2026-04-01&end=2026-04-30")
+
+    assert response.status_code == 200
+    assert response.get_json()["deleted"] == 2
+    remaining = client_with_data.get("/api/transactions").get_json()
+    assert len(remaining) == 1
+    assert remaining[0]["description"] == "Musterladen Zürich"
+
+
+def test_delete_transactions_by_type(client_with_data):
+    response = client_with_data.delete("/api/transactions?type=income")
+
+    assert response.status_code == 200
+    assert response.get_json()["deleted"] == 1
+    remaining = client_with_data.get("/api/transactions").get_json()
+    assert all(r["amount_cents"] < 0 for r in remaining)
+
+
+def test_delete_transactions_by_category(client_with_data):
+    categories = {c["name"]: c["id"] for c in client_with_data.get("/api/categories").get_json()}
+    lohn_id = categories["Lohn/Einkommen"]
+    # Reassign "Lohn April" to Lohn/Einkommen so the category filter has something to match.
+    pending_or_confirmed = client_with_data.get("/api/transactions").get_json()
+    lohn_row = next(r for r in pending_or_confirmed if r["description"] == "Lohn April")
+    conn = get_connection(client_with_data.application.config["DB_PATH"])
+    conn.execute("UPDATE transactions SET category_id = ? WHERE id = ?", (lohn_id, lohn_row["id"]))
+    conn.commit()
+    conn.close()
+
+    response = client_with_data.delete(f"/api/transactions?category_id={lohn_id}")
+
+    assert response.status_code == 200
+    assert response.get_json()["deleted"] == 1
+
+
+def test_delete_transactions_with_backup_creates_backup_file(client_with_data):
+    response = client_with_data.delete("/api/transactions?type=income&backup=true")
+
+    assert response.status_code == 200
+    db_path = client_with_data.application.config["DB_PATH"]
+    backup_dir = db_path.parent / "backups"
+    assert backup_dir.exists()
+    assert list(backup_dir.glob("*.db"))

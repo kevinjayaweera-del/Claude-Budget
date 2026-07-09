@@ -3,5 +3,6 @@ venv/
 __pycache__/
 *.pyc
 data/*.db
+data/backups/
 statements/*
 !statements/.gitkeep

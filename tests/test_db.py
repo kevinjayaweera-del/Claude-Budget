@@ -330,3 +330,44 @@ def test_init_db_migrates_ihre_zahlung_away_from_sonstiges(tmp_path):
     ).fetchone()
     assert row["name"] == "Kreditkarten-Ausgleich"
     conn.close()
+
+
+def test_init_db_seeds_default_settings(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+
+    settings = {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM settings")}
+    assert settings["auto_categorize_enabled"] == "true"
+    assert settings["confidence_threshold"] == "0.75"
+    conn.close()
+
+
+def test_init_db_settings_are_idempotent(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    conn.execute("UPDATE settings SET value = 'false' WHERE key = 'auto_categorize_enabled'")
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)  # second call must not overwrite Kevin's existing setting
+
+    value = conn.execute(
+        "SELECT value FROM settings WHERE key = 'auto_categorize_enabled'"
+    ).fetchone()["value"]
+    assert value == "false"
+    conn.close()
+
+
+def test_reset_db_restores_default_settings(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    conn.execute("UPDATE settings SET value = 'false' WHERE key = 'auto_categorize_enabled'")
+    conn.commit()
+    conn.close()
+
+    conn = reset_db(db_path)
+
+    value = conn.execute(
+        "SELECT value FROM settings WHERE key = 'auto_categorize_enabled'"
+    ).fetchone()["value"]
+    assert value == "true"
+    conn.close()

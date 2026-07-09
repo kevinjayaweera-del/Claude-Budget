@@ -49,7 +49,21 @@ CREATE TABLE IF NOT EXISTS budgets (
     category_id INTEGER NOT NULL UNIQUE REFERENCES categories(id),
     monthly_limit_cents INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+# Stored as strings (settings.value is TEXT) and parsed by the API layer —
+# a flat key/value store rather than dedicated columns so a new setting
+# never needs a schema migration, just a new default entry here.
+DEFAULT_SETTINGS = {
+    "auto_categorize_enabled": "true",
+    "confidence_threshold": "0.75",  # keep in sync with server.categorize.CONFIDENCE_THRESHOLD
+    "default_date_range_days": "",  # empty = no default filtering ("alle")
+}
 
 # Columns added after the initial schema. Applied via idempotent ALTER TABLE
 # so both fresh databases and Kevin's existing local data/budget.db pick
@@ -234,6 +248,8 @@ def init_db(db_path):
         conn.execute(
             "UPDATE categories SET excluded_from_totals = 1 WHERE name = ?", (name,)
         )
+    for key, value in DEFAULT_SETTINGS.items():
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
     for keyword, category_name in DEFAULT_CATEGORY_RULES:
         category_id = conn.execute(
             "SELECT id FROM categories WHERE name = ?", (category_name,)
@@ -278,6 +294,7 @@ def reset_db(db_path):
     conn.execute("DELETE FROM category_rules")
     conn.execute("DELETE FROM budgets")
     conn.execute("DELETE FROM categories")
+    conn.execute("DELETE FROM settings")
     conn.commit()
     conn.close()
     return init_db(db_path)

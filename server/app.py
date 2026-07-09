@@ -1,3 +1,5 @@
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +11,45 @@ from server.categorize import RuleBasedCategorizer, compute_confidence
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
+
+
+def _backup_database(db_path):
+    """Copy the sqlite file into a <db_path>/../backups/ dir with a
+    timestamped name. Best-effort: silently skipped if the source doesn't
+    exist yet (e.g. a brand-new in-memory-only test DB)."""
+    db_path = Path(db_path)
+    if not db_path.exists():
+        return None
+    backup_dir = db_path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"{db_path.stem}-{timestamp}.db"
+    shutil.copy2(db_path, backup_path)
+    return backup_path
+
+# A flat key/value store rather than dedicated columns (see server/db.py's
+# DEFAULT_SETTINGS) — this is the single place that knows how each key's
+# text value maps to a real Python type, so a new setting only needs an
+# entry here, not a schema migration.
+SETTINGS_KEYS = {"auto_categorize_enabled", "confidence_threshold", "default_date_range_days"}
+
+
+def _parse_setting_value(key, raw_value):
+    if key == "auto_categorize_enabled":
+        return raw_value == "true"
+    if key == "confidence_threshold":
+        return float(raw_value)
+    if key == "default_date_range_days":
+        return int(raw_value) if raw_value else None
+    return raw_value
+
+
+def _serialize_setting_value(key, value):
+    if key == "auto_categorize_enabled":
+        return "true" if value else "false"
+    if key == "default_date_range_days":
+        return "" if value is None else str(value)
+    return str(value)
 
 
 def get_db():
@@ -91,6 +132,8 @@ def register_routes(app):
         # transactions, pending rows, imported-file records, and learned
         # rules, then reseeds the defaults, so the same statements can be
         # rescanned repeatedly from a clean slate.
+        if request.args.get("backup") == "true":
+            _backup_database(current_app.config["DB_PATH"])
         reset_db(current_app.config["DB_PATH"]).close()
         return jsonify({"ok": True})
 
@@ -295,6 +338,50 @@ def register_routes(app):
             conn.close()
         return jsonify({"ok": True})
 
+    @app.route("/api/settings", methods=["GET"])
+    def get_settings():
+        conn = get_db()
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        result = {row["key"]: _parse_setting_value(row["key"], row["value"]) for row in rows}
+        db_path = current_app.config["DB_PATH"]
+        result["db_info"] = {
+            "transaction_count": conn.execute("SELECT COUNT(*) c FROM transactions").fetchone()["c"],
+            "pending_count": conn.execute("SELECT COUNT(*) c FROM pending_transactions").fetchone()["c"],
+            "category_count": conn.execute("SELECT COUNT(*) c FROM categories").fetchone()["c"],
+            "rule_count": conn.execute("SELECT COUNT(*) c FROM category_rules").fetchone()["c"],
+            "db_size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+        }
+        conn.close()
+        return jsonify(result)
+
+    @app.route("/api/settings", methods=["PUT"])
+    def update_settings():
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "request body must be a JSON object"}), 400
+        unknown = set(data.keys()) - SETTINGS_KEYS
+        if unknown:
+            return jsonify({"error": f"unknown setting(s): {', '.join(sorted(unknown))}"}), 400
+        if "confidence_threshold" in data:
+            try:
+                threshold = float(data["confidence_threshold"])
+            except (TypeError, ValueError):
+                return jsonify({"error": "confidence_threshold must be a number"}), 400
+            if not (0.0 <= threshold <= 1.0):
+                return jsonify({"error": "confidence_threshold must be between 0 and 1"}), 400
+        conn = get_db()
+        try:
+            for key, value in data.items():
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, _serialize_setting_value(key, value)),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
     @app.route("/api/categories", methods=["GET"])
     def list_categories():
         conn = get_db()
@@ -302,12 +389,146 @@ def register_routes(app):
         conn.close()
         return jsonify([dict(r) for r in rows])
 
+    @app.route("/api/categories", methods=["POST"])
+    def create_category():
+        data = request.get_json(silent=True)
+        if data is None or not str(data.get("name", "")).strip():
+            return jsonify({"error": "request body must include a non-empty name"}), 400
+        name = str(data["name"]).strip()
+        conn = get_db()
+        try:
+            existing = conn.execute("SELECT id FROM categories WHERE name = ?", (name,)).fetchone()
+            if existing is not None:
+                return jsonify({"error": "a category with this name already exists"}), 400
+            cursor = conn.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+            conn.commit()
+            return jsonify({"id": cursor.lastrowid, "name": name}), 201
+        finally:
+            conn.close()
+
+    @app.route("/api/categories/<int:category_id>", methods=["PUT"])
+    def rename_category(category_id):
+        data = request.get_json(silent=True)
+        if data is None or not str(data.get("name", "")).strip():
+            return jsonify({"error": "request body must include a non-empty name"}), 400
+        name = str(data["name"]).strip()
+        conn = get_db()
+        try:
+            category = conn.execute("SELECT id FROM categories WHERE id = ?", (category_id,)).fetchone()
+            if category is None:
+                return jsonify({"error": "category not found"}), 404
+            duplicate = conn.execute(
+                "SELECT id FROM categories WHERE name = ? AND id != ?", (name, category_id)
+            ).fetchone()
+            if duplicate is not None:
+                return jsonify({"error": "a category with this name already exists"}), 400
+            conn.execute("UPDATE categories SET name = ? WHERE id = ?", (name, category_id))
+            conn.commit()
+            return jsonify({"ok": True})
+        finally:
+            conn.close()
+
+    @app.route("/api/categories/<int:category_id>", methods=["DELETE"])
+    def delete_category(category_id):
+        conn = get_db()
+        try:
+            category = conn.execute(
+                "SELECT id, name FROM categories WHERE id = ?", (category_id,)
+            ).fetchone()
+            if category is None:
+                return jsonify({"error": "category not found"}), 404
+            if category["name"] == "Unkategorisiert":
+                return jsonify({"error": "Unkategorisiert cannot be deleted — it's the required fallback category"}), 400
+
+            dependency_counts = {
+                "transaction_count": conn.execute(
+                    "SELECT COUNT(*) c FROM transactions WHERE category_id = ?", (category_id,)
+                ).fetchone()["c"],
+                "pending_count": conn.execute(
+                    "SELECT COUNT(*) c FROM pending_transactions WHERE category_id = ?", (category_id,)
+                ).fetchone()["c"],
+                "rule_count": conn.execute(
+                    "SELECT COUNT(*) c FROM category_rules WHERE category_id = ?", (category_id,)
+                ).fetchone()["c"],
+                "budget_count": conn.execute(
+                    "SELECT COUNT(*) c FROM budgets WHERE category_id = ?", (category_id,)
+                ).fetchone()["c"],
+            }
+            has_dependencies = any(dependency_counts.values())
+            confirmed = request.args.get("confirm") == "true"
+            if has_dependencies and not confirmed:
+                return jsonify(dependency_counts), 409
+
+            if has_dependencies:
+                unkategorisiert_id = conn.execute(
+                    "SELECT id FROM categories WHERE name = 'Unkategorisiert'"
+                ).fetchone()["id"]
+                # Reassign rather than delete: transactions/pending rows keep
+                # their history under the fallback category, and rules keep
+                # their learned match/correction counts instead of losing
+                # them — only now suggesting "Unkategorisiert" going forward.
+                conn.execute(
+                    "UPDATE transactions SET category_id = ? WHERE category_id = ?",
+                    (unkategorisiert_id, category_id),
+                )
+                conn.execute(
+                    "UPDATE pending_transactions SET category_id = ? WHERE category_id = ?",
+                    (unkategorisiert_id, category_id),
+                )
+                conn.execute(
+                    "UPDATE pending_transactions SET suggested_category_id = NULL, "
+                    "suggested_rule_id = NULL, category_confidence = NULL "
+                    "WHERE suggested_category_id = ?",
+                    (category_id,),
+                )
+                conn.execute(
+                    "UPDATE category_rules SET category_id = ? WHERE category_id = ?",
+                    (unkategorisiert_id, category_id),
+                )
+                conn.execute("DELETE FROM budgets WHERE category_id = ?", (category_id,))
+
+            conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+            conn.commit()
+            return jsonify({"ok": True})
+        finally:
+            conn.close()
+
     @app.route("/api/transactions", methods=["GET"])
     def list_transactions():
         conn = get_db()
         rows = _fetch_filtered_transactions(conn, request.args)
         conn.close()
         return jsonify([dict(r) for r in rows])
+
+    @app.route("/api/transactions", methods=["DELETE"])
+    def delete_transactions():
+        # Bulk delete scoped by the SAME filters GET /api/transactions
+        # already supports — deliberately requires at least one to be set,
+        # so an accidental unfiltered call can't silently wipe everything
+        # (use /api/database/reset for that, a separate, explicit action).
+        filter_keys = ("start", "end", "category_id", "source", "type", "q", "min_amount", "max_amount")
+        if not any(request.args.get(key) for key in filter_keys):
+            return jsonify({
+                "error": "at least one filter (start, end, category_id, source, type, q, "
+                         "min_amount, max_amount) must be specified — use /api/database/reset to wipe everything"
+            }), 400
+
+        conn = get_db()
+        try:
+            rows = _fetch_filtered_transactions(conn, request.args)
+            ids = [row["id"] for row in rows]
+            if not ids:
+                return jsonify({"deleted": 0})
+            if request.args.get("backup") == "true":
+                conn.close()
+                _backup_database(current_app.config["DB_PATH"])
+                conn = get_db()
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(f"DELETE FROM transactions WHERE id IN ({placeholders})", ids)
+            conn.commit()
+            return jsonify({"deleted": len(ids)})
+        finally:
+            conn.close()
 
     @app.route("/api/sources", methods=["GET"])
     def list_sources():
@@ -363,6 +584,34 @@ def register_routes(app):
             "by_category": by_category_list,
             "by_month": by_month_list,
         })
+
+    @app.route("/api/export", methods=["GET"])
+    def export_data():
+        # Confirmed transactions, categories, learned rules, budgets, and
+        # settings — the durable data a restore would need. Deliberately
+        # excludes pending_transactions/imported_files (mid-import scratch
+        # state, not meaningful to carry across a restore).
+        conn = get_db()
+        try:
+            data = {
+                "exported_at": datetime.now().isoformat(),
+                "categories": [dict(r) for r in conn.execute(
+                    "SELECT id, name, excluded_from_totals FROM categories ORDER BY id"
+                )],
+                "category_rules": [dict(r) for r in conn.execute(
+                    "SELECT * FROM category_rules ORDER BY id"
+                )],
+                "transactions": [dict(r) for r in conn.execute(
+                    "SELECT * FROM transactions ORDER BY id"
+                )],
+                "budgets": [dict(r) for r in conn.execute("SELECT * FROM budgets ORDER BY id")],
+                "settings": {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM settings")},
+            }
+        finally:
+            conn.close()
+        response = jsonify(data)
+        response.headers["Content-Disposition"] = "attachment; filename=budget-tracker-export.json"
+        return response
 
 
 if __name__ == "__main__":

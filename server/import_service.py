@@ -34,11 +34,22 @@ def _existing_counts(conn, keys):
     return counts
 
 
+def _auto_categorize_enabled(conn):
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'auto_categorize_enabled'"
+    ).fetchone()
+    return row is None or row["value"] == "true"
+
+
 def scan_and_parse(conn, statements_dir):
     statements_dir = Path(statements_dir)
     created = 0
     duplicates_skipped = 0
     categorizer = RuleBasedCategorizer(conn)
+    auto_categorize = _auto_categorize_enabled(conn)
+    uncategorized_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Unkategorisiert'"
+    ).fetchone()["id"]
 
     for path in sorted(statements_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in (".csv", ".pdf"):
@@ -89,9 +100,12 @@ def scan_and_parse(conn, statements_dir):
                     file_duplicates += 1
                     continue
 
-                category_id, confidence, rule_id = categorizer.predict(
-                    row["description"], row["amount_cents"], row["currency"], source
-                )
+                if auto_categorize:
+                    category_id, confidence, rule_id = categorizer.predict(
+                        row["description"], row["amount_cents"], row["currency"], source
+                    )
+                else:
+                    category_id, confidence, rule_id = uncategorized_id, None, None
                 conn.execute(
                     "INSERT INTO pending_transactions "
                     "(date, description, amount_cents, currency, category_id, source, file_id, "
