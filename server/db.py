@@ -45,6 +45,20 @@ CREATE TABLE IF NOT EXISTS pending_transactions (
 );
 """
 
+# Columns added after the initial schema. Applied via idempotent ALTER TABLE
+# so both fresh databases and Kevin's existing local data/budget.db pick
+# them up on next start — see test_init_db_migrates_existing_database_*.
+MIGRATIONS = [
+    ("category_rules", "match_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("category_rules", "correction_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("category_rules", "iban", "TEXT"),
+    ("category_rules", "is_seeded", "INTEGER NOT NULL DEFAULT 0"),
+    ("category_rules", "created_at", "TEXT NOT NULL DEFAULT ''"),
+    ("pending_transactions", "suggested_category_id", "INTEGER REFERENCES categories(id)"),
+    ("pending_transactions", "suggested_rule_id", "INTEGER REFERENCES category_rules(id)"),
+    ("pending_transactions", "category_confidence", "REAL"),
+]
+
 # Derived from Kevin's real ZKB bank statements (CSV/PDF) and Swisscard/
 # Cornercard credit card statements — see docs/superpowers/specs for the
 # analysis. Goal: the first real import needs as little manual
@@ -66,13 +80,11 @@ DEFAULT_CATEGORY_RULES = [
     ("coop", "Lebensmittel"),
     ("volg", "Lebensmittel"),
     ("denner", "Lebensmittel"),
-    # "metzg"/"confis"/"bäckerei"+"baeckerei" deliberately cover both the
-    # full German word and the shortened Swiss-German / ASCII-transliterated
-    # forms seen across different statement exports (e.g. "CHAEMI METZG AG",
-    # "Confiseur Bachmann AG", "BAECKEREI BODE" vs "Bäckerei ...").
     ("metzg", "Lebensmittel"),
+    # A single umlaut spelling is enough now — RuleBasedCategorizer.predict()
+    # normalizes stored keywords before matching (see Task 3), so "bäckerei"
+    # transparently also matches an incoming "BAECKEREI"/"Backerei" spelling.
     ("bäckerei", "Lebensmittel"),
-    ("baeckerei", "Lebensmittel"),
     ("back.-conf.", "Lebensmittel"),
     ("confis", "Lebensmittel"),
     # Restaurants/Ausgang
@@ -154,10 +166,18 @@ def get_connection(db_path):
     return conn
 
 
+def _apply_migrations(conn):
+    for table, column, ddl in MIGRATIONS:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def init_db(db_path):
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)
     conn.executescript(SCHEMA)
+    _apply_migrations(conn)
     for name in DEFAULT_CATEGORIES:
         conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (name,))
     for keyword, category_name in DEFAULT_CATEGORY_RULES:
@@ -165,7 +185,9 @@ def init_db(db_path):
             "SELECT id FROM categories WHERE name = ?", (category_name,)
         ).fetchone()["id"]
         conn.execute(
-            "INSERT OR IGNORE INTO category_rules (keyword, category_id) VALUES (?, ?)",
+            "INSERT OR IGNORE INTO category_rules "
+            "(keyword, category_id, match_count, correction_count, is_seeded, created_at) "
+            "VALUES (?, ?, 3, 0, 1, datetime('now'))",
             (keyword, category_id),
         )
     conn.commit()
