@@ -111,6 +111,26 @@ button, input, select {
   outline-offset: 2px;
 }
 
+/* ---------- Dev/test reset bar ---------- */
+.dev-reset-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  margin-bottom: 1.5rem;
+  padding: 0.5rem 0.9rem;
+  background: var(--surface-sunken);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-control);
+}
+.dev-reset-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-right: auto;
+}
+
 /* ---------- Header ---------- */
 .app-header {
   display: flex;

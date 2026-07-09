@@ -192,3 +192,18 @@ def init_db(db_path):
         )
     conn.commit()
     return conn
+
+
+def reset_db(db_path):
+    """Wipe all data (transactions, pending rows, imported-file records,
+    learned/seeded rules, categories) and reseed the defaults — a clean-slate
+    reset for repeated test imports, not a normal-operation code path."""
+    conn = get_connection(db_path)
+    conn.execute("DELETE FROM transactions")
+    conn.execute("DELETE FROM pending_transactions")
+    conn.execute("DELETE FROM imported_files")
+    conn.execute("DELETE FROM category_rules")
+    conn.execute("DELETE FROM categories")
+    conn.commit()
+    conn.close()
+    return init_db(db_path)

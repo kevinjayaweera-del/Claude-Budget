@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 from flask import Flask, abort, current_app, jsonify, request, send_from_directory
 
-from server.db import get_connection, init_db
+from server.db import get_connection, init_db, reset_db
 from server.import_service import scan_and_parse
 from server.categorize import RuleBasedCategorizer, compute_confidence
 
@@ -83,6 +83,15 @@ def register_routes(app):
     @app.route("/<path:filename>")
     def static_files(filename):
         return send_from_directory(WEB_DIR, filename)
+
+    @app.route("/api/database/reset", methods=["POST"])
+    def reset_database():
+        # Testing/dev convenience, not a normal-operation route — wipes all
+        # transactions, pending rows, imported-file records, and learned
+        # rules, then reseeds the defaults, so the same statements can be
+        # rescanned repeatedly from a clean slate.
+        reset_db(current_app.config["DB_PATH"]).close()
+        return jsonify({"ok": True})
 
     @app.route("/api/scan", methods=["POST"])
     def scan():

@@ -1,0 +1,50 @@
+import pytest
+
+from server.app import create_app
+from server.db import DEFAULT_CATEGORIES
+
+
+@pytest.fixture
+def client(tmp_path):
+    app = create_app(db_path=tmp_path / "test.db", statements_dir=tmp_path / "statements")
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+def _write_sample_csv(tmp_path):
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Musterladen Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+
+
+def test_reset_database_clears_transactions_and_pending(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+    client.post("/api/import/confirm")
+    assert len(client.get("/api/transactions").get_json()) == 1
+
+    response = client.post("/api/database/reset")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True}
+    assert client.get("/api/transactions").get_json() == []
+    assert client.get("/api/pending").get_json() == []
+
+
+def test_reset_database_reseeds_default_categories(client):
+    client.post("/api/database/reset")
+
+    names = {c["name"] for c in client.get("/api/categories").get_json()}
+    assert names == set(DEFAULT_CATEGORIES)
+
+
+def test_reset_database_allows_rescanning_previously_imported_file(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+    client.post("/api/import/confirm")
+
+    client.post("/api/database/reset")
+    result = client.post("/api/scan").get_json()
+
+    assert result == {"new_pending": 1, "duplicates_skipped": 0}

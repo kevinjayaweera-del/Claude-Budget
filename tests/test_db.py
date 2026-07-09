@@ -1,6 +1,6 @@
 import sqlite3
 
-from server.db import init_db, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_RULES
+from server.db import init_db, reset_db, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_RULES
 from server.categorize import RuleBasedCategorizer
 
 
@@ -166,4 +166,48 @@ def test_init_db_migration_is_idempotent(tmp_path):
 
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(category_rules)")}
     assert "match_count" in columns
+    conn.close()
+
+
+def test_reset_db_clears_all_data_and_reseeds_defaults(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    lebensmittel_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Lebensmittel'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO imported_files (hash, filename, source, imported_at) "
+        "VALUES ('abc', 'test.csv', 'test', datetime('now'))"
+    )
+    conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, category_id, source, manually_corrected) "
+        "VALUES ('2026-03-01', 'Testausgabe', -1000, 'CHF', ?, 'test', 0)",
+        (lebensmittel_id,),
+    )
+    conn.execute(
+        "INSERT INTO pending_transactions (date, description, amount_cents, currency, category_id, source) "
+        "VALUES ('2026-03-02', 'Noch offen', -500, 'CHF', ?, 'test')",
+        (lebensmittel_id,),
+    )
+    conn.execute(
+        "INSERT INTO category_rules (keyword, category_id, match_count, correction_count, is_seeded, created_at) "
+        "VALUES ('gelernteregel', ?, 5, 0, 0, datetime('now'))",
+        (lebensmittel_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    conn = reset_db(db_path)
+
+    assert conn.execute("SELECT COUNT(*) c FROM transactions").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM pending_transactions").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM imported_files").fetchone()["c"] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM category_rules WHERE keyword = 'gelernteregel'"
+    ).fetchone()["c"] == 0
+
+    names = {row["name"] for row in conn.execute("SELECT name FROM categories").fetchall()}
+    assert names == set(DEFAULT_CATEGORIES)
+    rule_count = conn.execute("SELECT COUNT(*) c FROM category_rules").fetchone()["c"]
+    assert rule_count == len(DEFAULT_CATEGORY_RULES)
     conn.close()
