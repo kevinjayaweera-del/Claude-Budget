@@ -259,6 +259,79 @@ def test_default_category_rules_group_similar_merchants_under_one_category(tmp_p
     conn.close()
 
 
+def test_default_category_rules_recognize_second_mining_pass(tmp_path):
+    # Second real-data mining pass, after Kevin dropped a full year of both
+    # ZKB and Swisscard/Cornercard statements into statements/ and asked to
+    # relearn from the complete set — see the categorization-improvement
+    # pass this test documents.
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        return conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()["name"]
+
+    # Lebensmittel
+    assert category_name("TEGUTFILIALE2398,FRANKFURT") == "Lebensmittel"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Oswald Nahrungsmittel Gm") == "Lebensmittel"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, New Asia Market 0800 Zurich") == "Lebensmittel"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Asia Store GmbH 0800 Zurich") == "Lebensmittel"
+    # Restaurants/Ausgang — "pizza" is now a generic catch-all, alongside
+    # several specific vendors that don't contain "restaurant"/"cafe"/"pizza".
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Neue Pizza Muster 0000") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Brezelkonig AG 0800 Zuerich") == "Restaurants/Ausgang"
+    assert category_name("COMPANYSZUERICH,ZUERICH") == "Restaurants/Ausgang"
+    assert category_name("STARKEBAB,COSTACAPARIC") == "Restaurants/Ausgang"
+    assert category_name("PEZZODIPANEFLUGHAFE,HAMBURG") == "Restaurants/Ausgang"
+    assert category_name("LSMPANADASTORE,ZUERICH") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Namastey India Singh 0813") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Luckys Thai Food 0000") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Jack's Thai GmbH 0891") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Marmar Cuisine Orienta 0000") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Elvetino AG 0804 Zurich") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Triemlis Food Shop 0805") == "Restaurants/Ausgang"
+    assert category_name("TRIEMLISFOODSHOP,ZUERICH") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Butegar Pizza 0000 Zuerich") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Boostbar 0000 Zuerich") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Il Quadrifoglio 00000") == "Restaurants/Ausgang"
+    # Transport — "taxi" is now a generic catch-all instead of one keyword
+    # per taxi company.
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Taxi Neuwagen Bern") == "Transport"
+    assert category_name("100000008892954 Pedaggi A , Assago , Italien") == "Transport"
+    assert category_name("SHOP.ASFINAG.AT,WIEN") == "Transport"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Parkdepot GmbH 0000") == "Transport"
+    assert category_name("DOTTSCOOTERRIDE,ZUERICH") == "Transport"
+    # Reisen
+    assert category_name("LUFTHANSA 2202244494353 , BASEL") == "Reisen"
+    assert category_name("RENTALCARS.COM , LONDON , VEREINIGTES KOENIGREI") == "Reisen"
+    assert category_name("WWW.SUNNYCARS.CH,R.15591715") == "Reisen"
+    # Shopping
+    assert category_name("CANYON,KOBLENZ") == "Shopping"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Suspension Center GmbH") == "Shopping"
+    assert category_name("BIKE-IMPORT.CHAG,ZOLLIKOFEN") == "Shopping"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Fielmann 0561 0000 Zurich") == "Shopping"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 5770, zooplus CH 447717421") == "Shopping"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 5770, SP EHRENKIND 74523") == "Shopping"
+    # Abos
+    assert category_name("WHOOP , WHOOP.COM , VEREINIGTE STAATEN") == "Abos"
+    assert category_name("ONLYFANS.COM,LONDON") == "Abos"
+    # Sonstiges
+    assert category_name("Rundung") == "Sonstiges"
+    assert category_name("Jahresbeitrag") == "Sonstiges"
+    assert category_name("MOL*CORPORATEBENEFITS,41313013636") == "Sonstiges"
+    assert category_name("Gutschrift Auftraggeber: Primarschulgemeinde, Dettenbuehlstrasse 2, 8907 Wettswil") == "Sonstiges"
+    # Miete/Wohnen
+    assert category_name(
+        "Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Miteigentumergemeinschaf"
+    ) == "Miete/Wohnen"
+    # Gesundheit
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Amavita Zug 10254 6300 Zug") == "Gesundheit"
+    assert category_name("Kopfwehzentrum Hirslanden AG, Forchstrassse 424, 8702 Zollikon, CH") == "Gesundheit"
+    conn.close()
+
+
 def test_init_db_adds_learning_columns_to_category_rules(tmp_path):
     conn = init_db(tmp_path / "test.db")
 

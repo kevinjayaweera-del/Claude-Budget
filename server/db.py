@@ -128,6 +128,11 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # than the bare brand name — "spar" alone would false-positive on
         # "sparen"/"Sparen/Anlegen"-adjacent text.
         "spar dankt",
+        # Second real-data mining pass (full year of statements): Tegut is
+        # a German supermarket chain; "nahrungsmittel" (foodstuffs) is a
+        # generic word that reliably signals a food wholesaler/supplier
+        # regardless of the specific company name.
+        "tegutfiliale", "nahrungsmittel", "new asia market", "asia store",
     ],
     "Restaurants/Ausgang": [
         # Generic dining-out words — catch any vendor that doesn't match a
@@ -170,6 +175,16 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # Marché (SV Group) — a restaurant chain at Swiss train stations/
         # airports/highway stops, e.g. "Marche-6137 Firehouse".
         "marche-",
+        # Second real-data mining pass (full year of statements). "pizza"
+        # is a generic catch-all — like "restaurant"/"cafe" above, it
+        # covers any pizzeria that isn't "pizza falcone" specifically.
+        "pizza", "brezelkonig", "starkebab", "pezzodipane", "lsmpanadastore",
+        "namastey", "luckys thai", "jack's thai", "marmar cuisine",
+        "elvetino", "triemlis food shop", "triemlisfoodshop", "butegar",
+        "boostbar", "quadrifoglio",
+        # Cornercard glues "Companys" (a tapas-bar chain) directly onto the
+        # city with no space, same issue as "pizzafalcone" above.
+        "companyszuerich",
     ],
     "Transport": [
         "sbb", "sbb mobile", "tankstell", "parkingpay", "taxifahrt",
@@ -184,6 +199,15 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # "tankstell"/"uber" keywords above.
         "shell", "socar", "avia", "agrola", "dott scooter", "bolt.",
         "amag leasing", "parkhaus", "carwash",
+        # Cornercard's comma-joined format glues this one too — same issue
+        # as "pizzafalcone"/"swissintlairlines" above.
+        "dottscooterride",
+        # Second real-data mining pass: "taxi" generalizes past the
+        # existing "taxifahrt" — a taxi company's own name (e.g. "Taxi
+        # Asmat") doesn't contain that word at all. "pedaggi" (Italian) and
+        # "asfinag" (Austrian) are foreign highway-toll charges;
+        # "parkdepot" is a parking-garage operator.
+        "taxi", "pedaggi", "asfinag", "parkdepot",
     ],
     "Reisen": [
         "swiss intl air lines",
@@ -194,6 +218,10 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         "swissintlairlines",
         "easyjet", "emirates", "hotel", "airbnb", "meininger",
         "getyourguide", "airalo",
+        # Second real-data mining pass: another airline, two car-rental
+        # sites, and a Frankfurt museum-district visit (Kevin travels there
+        # regularly per other Reisen/Frankfurt entries elsewhere).
+        "lufthansa", "rentalcars", "sunnycars", "frankfurtmuseumsufer",
     ],
     "Versicherungen": [
         "ökk",
@@ -232,6 +260,11 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # cafe" (Restaurants/Ausgang) above so the on-site café still wins
         # for actual café purchases; this only catches the hospital itself.
         "stadtspital triemli",
+        # Second real-data mining pass: Amavita is a Swiss pharmacy chain;
+        # Hirslanden is a private-hospital-group brand (kept as the bare
+        # name so it also catches other Hirslanden-branded facilities, not
+        # just this specific headache clinic).
+        "amavita", "hirslanden",
     ],
     "Shopping": [
         "zalando", "digitec galaxus", "galaxus mobile", "media markt",
@@ -247,6 +280,11 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # prints inconsistent spacing after the asterisk across statements,
         # so both observed spellings are kept.
         "klarna*h m", "klarna* h m",
+        # Second real-data mining pass: a bicycle brand, a bike-suspension
+        # shop, an online bike importer, an optician chain, a pet-supplies
+        # retailer, and a children's-clothing brand bought via Klarna.
+        "canyon", "suspension center", "bike-import", "fielmann", "zooplus",
+        "ehrenkind",
     ],
     "Abos": [
         "spotify", "netflix", "apple.com/bill", "sayintentions",
@@ -255,6 +293,9 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # plain "digitec galaxus"/"galaxus mobile" one-off purchases above
         # (Shopping).
         "galaxus abos",
+        # Second real-data mining pass: a fitness-tracker subscription and
+        # a content-subscription platform.
+        "whoop", "onlyfans",
     ],
     "Freizeit": [
         "steamgames", "coiffure", "playstation network", "sanapark",
@@ -271,6 +312,12 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
     ],
     "Miete/Wohnen": [
         "barth real ag", "otto markwalder", "elektrizitaetswerke",
+        # Second real-data mining pass: a condo owners' association fee
+        # (Miteigentümergemeinschaft) is housing-related, not generic
+        # "Sonstiges". Kept as this literal (umlaut-dropped) substring
+        # rather than folding, since the stored description text is
+        # itself truncated at this point.
+        "miteigentumergemeinschaf",
     ],
     # Both sides of the "pay off the credit card bill from the checking
     # account" event: the credit-card statement's own payment-received
@@ -308,6 +355,12 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # ZKB drops the umlaut entirely here too ("Bevölkerungsamt" ->
         # "Bevolkerungsamt"), same issue as "bäckerei"/"backerei" above.
         "bevolkerungsamt", "einwohnermeldeamt", "gemeindeverwaltung",
+        # Second real-data mining pass: a payment-rounding adjustment, a
+        # generic annual-membership-fee line, the Cornercard no-space
+        # spelling of the existing "corporate benefits" keyword, and a
+        # primary-school-district payment.
+        "rundung", "jahresbeitrag", "corporatebenefits",
+        "primarschulgemeinde",
     ],
     "Lohn/Einkommen": [
         # Any "Gutschrift Salär: <employer>" line, regardless of employer
