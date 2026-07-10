@@ -222,11 +222,21 @@ def register_routes(app):
         else:
             rows = conn.execute("SELECT * FROM pending_transactions").fetchall()
         categorizer = RuleBasedCategorizer(conn)
+        # "Unkategorisiert" is the "I don't know" placeholder, never a real
+        # answer — confirming a row with it (whether left as the default or
+        # actively corrected back to it) must never teach the categorizer a
+        # keyword-to-Unkategorisiert rule. Doing so would make the system
+        # more confident about predicting "no category" for similar future
+        # bookings, which needs MORE manual review, not less.
+        unkategorisiert_id = conn.execute(
+            "SELECT id FROM categories WHERE name = 'Unkategorisiert'"
+        ).fetchone()["id"]
         for row in rows:
             final_category_id = row["category_id"]
             suggested_category_id = row["suggested_category_id"]
             suggested_rule_id = row["suggested_rule_id"]
             manually_corrected = 1 if final_category_id != suggested_category_id else 0
+            should_learn = final_category_id is not None and final_category_id != unkategorisiert_id
 
             if suggested_rule_id is not None:
                 if manually_corrected:
@@ -234,14 +244,14 @@ def register_routes(app):
                         "UPDATE category_rules SET correction_count = correction_count + 1 WHERE id = ?",
                         (suggested_rule_id,),
                     )
-                    if final_category_id is not None:
+                    if should_learn:
                         categorizer.learn(row["description"], final_category_id, was_correction=True)
                 else:
                     conn.execute(
                         "UPDATE category_rules SET match_count = match_count + 1 WHERE id = ?",
                         (suggested_rule_id,),
                     )
-            elif final_category_id is not None:
+            elif should_learn:
                 categorizer.learn(row["description"], final_category_id, was_correction=False)
 
             conn.execute(

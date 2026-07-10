@@ -288,6 +288,59 @@ def test_confirm_import_penalizes_old_rule_and_learns_new_one_on_correction(clie
     assert transactions[0]["category_id"] == categories["Sonstiges"]
 
 
+def test_confirm_import_does_not_learn_a_rule_when_left_uncategorized(client, tmp_path):
+    # A row with no rule match defaults to "Unkategorisiert" — if the user
+    # confirms it as-is (declining to pick a real category), that must NOT
+    # teach the categorizer "this keyword means Unkategorisiert". Otherwise,
+    # leaving something unresolved trains the system to more confidently
+    # predict "no category" for similar future bookings — the opposite of
+    # what learning is for.
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;ZackigerHaendler;-12.00;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+
+    client.post("/api/import/confirm")  # left as the default "Unkategorisiert"
+
+    rules = _rule_stats(tmp_path / "test.db")
+    assert not any(r["keyword"] == "zackigerhaendler" for r in rules)
+
+
+def test_confirm_import_does_not_learn_a_rule_when_corrected_to_uncategorized(client, tmp_path):
+    # Same principle when a suggested category is actively corrected BACK to
+    # Unkategorisiert — still not a useful keyword-to-category signal.
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    pending = client.get("/api/pending").get_json()[0]
+    categories = {c["name"]: c["id"] for c in client.get("/api/categories").get_json()}
+    migros_before = next(r for r in _rule_stats(tmp_path / "test.db") if r["keyword"] == "migros")
+
+    client.put(f"/api/pending/{pending['id']}", json={
+        "date": pending["date"],
+        "description": pending["description"],
+        "amount_cents": pending["amount_cents"],
+        "currency": pending["currency"],
+        "category_id": categories["Unkategorisiert"],
+    })
+    client.post("/api/import/confirm")
+
+    migros_after = next(r for r in _rule_stats(tmp_path / "test.db") if r["keyword"] == "migros")
+    assert migros_after["correction_count"] == migros_before["correction_count"] + 1
+    # No new rule keyed on this description's other words should target Unkategorisiert.
+    unkategorisiert_id = categories["Unkategorisiert"]
+    conn = get_connection(tmp_path / "test.db")
+    poisoned = conn.execute(
+        "SELECT COUNT(*) c FROM category_rules WHERE category_id = ? AND keyword != 'migros'",
+        (unkategorisiert_id,),
+    ).fetchone()["c"]
+    conn.close()
+    assert poisoned == 0
+
+
 def test_confirm_import_sets_manually_corrected_flag(client, tmp_path):
     (tmp_path / "statements" / "test.csv").write_text(
         "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
