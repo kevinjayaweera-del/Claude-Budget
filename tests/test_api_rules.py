@@ -15,10 +15,10 @@ def test_list_rules_includes_confidence_and_stats(client):
 
     migros = next(r for r in rules if r["keyword"] == "migros")
     assert migros["category_name"] == "Lebensmittel"
-    assert migros["match_count"] == 3
+    assert migros["match_count"] == 0
     assert migros["correction_count"] == 0
     assert migros["is_seeded"] == 1
-    assert migros["confidence"] == pytest.approx(4 / 5)
+    assert migros["confidence"] == pytest.approx(1 / 2)
 
 
 def test_update_rule_changes_target_category(client):

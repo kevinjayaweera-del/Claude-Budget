@@ -43,9 +43,17 @@ auf, statt ihn zu ersetzen.
   Start-Regeln von gelernten Regeln (für die Verwaltungsseite)
 - `created_at TEXT NOT NULL DEFAULT (datetime('now'))`
 
-Die 57 vordefinierten Regeln aus der vorigen Iteration werden beim Seeding
-mit `is_seeded=1, match_count=3, correction_count=0` angelegt (siehe
-Konfidenz-Berechnung unten) statt mit 0/0.
+Die vordefinierten Regeln werden beim Seeding mit `is_seeded=1,
+match_count=0, correction_count=0` angelegt — bewusst identisch zu einer
+frisch gelernten Regel, nicht mit einem Vorsprung. Eine frühere Version
+seedete `match_count=3` (Konfidenz 0.8), was jede der ~200 vordefinierten
+Regeln bereits ab dem ersten Treffer über `CONFIDENCE_THRESHOLD` (0.75)
+hob, ganz ohne dass ein einziges reales Buchung sie je bestätigt hätte.
+Bei Kevins echtem 934-Buchungen-Import führte das dazu, dass 899 (96%)
+automatisch ohne Prüfung übernommen wurden statt der ~90%, die eine
+tatsächlich verdiente Erfolgsquote ergibt. `is_seeded` unterscheidet
+weiterhin vordefinierte von gelernten Regeln (für die
+Verwaltungsseite) — es beeinflusst nur nicht mehr die Startkonfidenz.
 
 **`pending_transactions`** — neue Spalten:
 - `suggested_category_id INTEGER REFERENCES categories(id)` — die
@@ -113,10 +121,13 @@ Laplace-geglättete Erfolgsrate pro Regel:
 confidence = (match_count + 1) / (match_count + correction_count + 2)
 ```
 
-Eigenschaften: eine nagelneue gelernte Regel (0/0) startet bei 50%; eine
-vordefinierte Regel (Seed: 3/0) startet bei 80%; mit wachsender Historie
-nähert sich der Wert asymptotisch der beobachteten Erfolgsrate an, ohne
-je exakt 0% oder 100% zu erreichen.
+Eigenschaften: sowohl eine nagelneue gelernte Regel als auch eine frisch
+vordefinierte Regel starten bei 0/0, also 50% — unter
+`CONFIDENCE_THRESHOLD` (0.75), muss also erst mindestens zweimal
+unkorrigiert bestätigt werden (match_count=2 → 75%), bevor sie eine
+Buchung ohne Prüfung übernehmen darf. Mit wachsender Historie nähert
+sich der Wert asymptotisch der beobachteten Erfolgsrate an, ohne je
+exakt 0% oder 100% zu erreichen.
 
 Die Kategorie-Auswahl selbst (welche Regel gewinnt bei mehreren
 Treffern) bleibt unverändert: längstes passendes Keyword gewinnt

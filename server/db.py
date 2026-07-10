@@ -462,6 +462,18 @@ def init_db(db_path):
         )
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    # Seeded with match_count=0 like any freshly-learned rule (see
+    # RuleBasedCategorizer.learn()) — NOT a head start above
+    # CONFIDENCE_THRESHOLD. An earlier version seeded match_count=3, giving
+    # every one of the ~200 seeded rules confidence >= 0.8 (compute_confidence
+    # in server/categorize.py) from the moment the database existed, before a
+    # single real transaction had ever validated the keyword. On Kevin's real
+    # 934-transaction import that silently auto-accepted 899 (96%) — most of
+    # them via rules that had never once been confirmed — instead of the
+    # ~90% a genuinely earned track record produces. A hand-curated keyword
+    # still gets used for the suggestion immediately; it just has to be
+    # confirmed correct twice (match_count reaching 2, confidence 0.75)
+    # before it's trusted enough to skip manual review.
     for keyword, category_name in DEFAULT_CATEGORY_RULES:
         category_id = conn.execute(
             "SELECT id FROM categories WHERE name = ?", (category_name,)
@@ -469,7 +481,7 @@ def init_db(db_path):
         conn.execute(
             "INSERT OR IGNORE INTO category_rules "
             "(keyword, category_id, match_count, correction_count, is_seeded, created_at) "
-            "VALUES (?, ?, 3, 0, 1, datetime('now'))",
+            "VALUES (?, ?, 0, 0, 1, datetime('now'))",
             (keyword, category_id),
         )
     # One-off retarget for a pre-existing database where "ihre zahlung" was

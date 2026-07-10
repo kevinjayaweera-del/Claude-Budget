@@ -51,8 +51,8 @@ async function loadPending() {
   autoAcceptedPendingIds = [];
 
   updateEmptyState(rows.length > 0);
-  updatePendingCountBadge(rows.length);
   if (rows.length === 0) {
+    updatePendingCountBadge(0);
     section.classList.add("hidden");
     return;
   }
@@ -69,10 +69,16 @@ async function loadPending() {
     reviewRows.push(row);
   });
 
+  // The badge counts what's actually in the table below it (rows still
+  // needing a manual look), not every pending row — those two numbers
+  // differ whenever some rows were confident enough to auto-accept, and
+  // conflating them made it look like bookings were missing from the list.
+  updatePendingCountBadge(reviewRows.length);
+
   if (autoAcceptedPendingIds.length > 0) {
     autoNote.textContent =
-      `${autoAcceptedPendingIds.length} Buchung(en) mit hoher Konfidenz werden ohne Prüfung übernommen, ` +
-      "sobald du den Import bestätigst.";
+      `${rows.length} Buchung(en) importiert: ${autoAcceptedPendingIds.length} mit hoher Konfidenz automatisch ` +
+      `zugeteilt, ${reviewRows.length} zur Prüfung unten.`;
     autoNote.classList.remove("hidden");
   } else {
     autoNote.classList.add("hidden");

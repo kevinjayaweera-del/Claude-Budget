@@ -372,16 +372,41 @@ def test_init_db_adds_suggestion_columns_to_pending_transactions(tmp_path):
     conn.close()
 
 
-def test_init_db_seeds_default_rules_with_starting_track_record(tmp_path):
+def test_init_db_seeds_default_rules_without_an_unearned_confidence_head_start(tmp_path):
     conn = init_db(tmp_path / "test.db")
 
     row = conn.execute(
         "SELECT match_count, correction_count, is_seeded FROM category_rules WHERE keyword = 'migros'"
     ).fetchone()
-    assert row["match_count"] == 3
+    assert row["match_count"] == 0
     assert row["correction_count"] == 0
     assert row["is_seeded"] == 1
     conn.close()
+
+
+def test_seeded_rules_start_below_the_auto_accept_confidence_threshold(tmp_path):
+    # Regression guard for the bug where every seeded rule started with
+    # match_count=3 (confidence 0.8), clearing CONFIDENCE_THRESHOLD (0.75)
+    # before a single real transaction had ever validated the keyword — on
+    # Kevin's real import this silently auto-accepted 899/934 (96%) rows,
+    # many via rules with zero real confirmations, instead of the ~90% a
+    # genuinely earned track record produces. A seeded rule must still need
+    # at least one real confirmation before it can skip manual review.
+    from server.categorize import CONFIDENCE_THRESHOLD, compute_confidence
+
+    conn = init_db(tmp_path / "test.db")
+    rows = conn.execute(
+        "SELECT keyword, match_count, correction_count FROM category_rules WHERE is_seeded = 1"
+    ).fetchall()
+    conn.close()
+
+    assert rows, "expected seeded rules to exist"
+    for row in rows:
+        confidence = compute_confidence(row["match_count"], row["correction_count"])
+        assert confidence < CONFIDENCE_THRESHOLD, (
+            f"seeded rule '{row['keyword']}' starts at confidence {confidence:.3f}, "
+            f"already at/above CONFIDENCE_THRESHOLD ({CONFIDENCE_THRESHOLD}) with zero real confirmations"
+        )
 
 
 def test_init_db_migrates_existing_database_without_losing_data(tmp_path):
