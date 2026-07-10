@@ -10,6 +10,8 @@ from server.parsers.pdf_parser import (
     _group_words_into_rows,
     _to_iso_date,
     _extract_statement_month_year,
+    _match_batch_header,
+    _parse_batch_detail_row,
 )
 
 
@@ -499,4 +501,227 @@ def test_parse_pdf_falls_back_to_pypdf_decrypt_when_pdfplumber_open_fails(tmp_pa
 
     assert rows == [
         {"date": "2026-03-01", "description": "Migros Zuerich", "amount_cents": -4590, "currency": "CHF"},
+    ]
+
+
+# --- Collective bookings ("Belastungen Dauerauftrag (3) Auftrags-Nr. ...")
+# ---
+#
+# ZKB sometimes bundles several standing-order/eBill/mobile-banking debits
+# (or credits) that were collected together into one summary line printed
+# with a "(n)" count instead of a single recipient, followed by n detail
+# lines (recipient + a glued "CHF<amount>" token, no leading date of their
+# own). The summary line's own total must never be imported as a
+# transaction — only the n detail lines, each as its own booking dated the
+# same as the summary line.
+
+def test_match_batch_header_returns_debit_and_count():
+    row = [
+        _word("26.06.2026", 56.7, 96.7, 300.0),
+        _word("Belastungen", 102.0, 143.8, 300.0),
+        _word("Dauerauftrag", 146.0, 191.4, 300.0),
+        _word("(3)", 193.6, 202.5, 300.0),
+        _word("Auftrags-Nr.Z261778996812", 204.8, 306.6, 300.0),
+        _word("3'100.00", 586.8, 617.9, 300.0),
+    ]
+    assert _match_batch_header(row) == (True, 3)
+
+
+def test_match_batch_header_recognizes_gutschriften_as_credit():
+    row = [
+        _word("26.06.2026", 56.7, 96.7, 300.0),
+        _word("Gutschriften", 102.0, 143.8, 300.0),
+        _word("eBill", 146.0, 170.0, 300.0),
+        _word("(2)", 172.0, 181.0, 300.0),
+        _word("Auftrags-Nr.Z1", 183.0, 250.0, 300.0),
+    ]
+    assert _match_batch_header(row) == (False, 2)
+
+
+def test_match_batch_header_returns_none_for_a_normal_transaction_row():
+    row = [
+        _word("26.06.2026", 56.7, 96.7, 300.0),
+        _word("Migros", 102.0, 130.0, 300.0),
+    ]
+    assert _match_batch_header(row) is None
+
+
+def test_match_batch_header_returns_none_without_a_count_in_parens():
+    # The single-recipient form ("Belastung Dauerauftrag: Name, ...") has no
+    # "(n)" at all — that's the existing/already-correct single-transaction
+    # path and must not be treated as a collective booking.
+    row = [
+        _word("26.06.2026", 56.7, 96.7, 300.0),
+        _word("Belastung", 102.0, 130.0, 300.0),
+        _word("Dauerauftrag:", 132.0, 190.0, 300.0),
+        _word("Otto", 192.0, 210.0, 300.0),
+        _word("Markwalder,", 212.0, 260.0, 300.0),
+    ]
+    assert _match_batch_header(row) is None
+
+
+def test_parse_batch_detail_row_extracts_recipient_and_amount():
+    row = [
+        _word("AMAG", 102.0, 130.0, 314.9),
+        _word("Leasing", 132.0, 165.0, 314.9),
+        _word("AG,", 167.0, 180.0, 314.9),
+        _word("Alte", 182.0, 200.0, 314.9),
+        _word("Steinhauserstrasse", 202.0, 280.0, 314.9),
+        _word("12,", 282.0, 295.0, 314.9),
+        _word("6330", 297.0, 315.0, 314.9),
+        _word("Cham,", 317.0, 340.0, 314.9),
+        _word("CH", 342.0, 355.0, 314.9),
+        _word("CHF622.60", 499.5, 547.1, 314.9),
+    ]
+
+    result = _parse_batch_detail_row(row, "2026-06-26", is_debit=True)
+
+    assert result == {
+        "date": "2026-06-26",
+        "description": "AMAG Leasing AG, Alte Steinhauserstrasse 12, 6330 Cham, CH",
+        "amount_cents": -62260,
+        "currency": "CHF",
+    }
+
+
+def test_parse_batch_detail_row_is_positive_for_credits():
+    row = [
+        _word("Some", 102.0, 130.0, 314.9),
+        _word("Employer", 132.0, 165.0, 314.9),
+        _word("CHF1'500.00", 499.5, 547.1, 314.9),
+    ]
+
+    result = _parse_batch_detail_row(row, "2026-06-26", is_debit=False)
+
+    assert result["amount_cents"] == 150000
+
+
+def test_parse_batch_detail_row_returns_none_without_a_chf_amount():
+    row = [_word("Zuercher", 102.0, 130.0, 314.9), _word("Kantonalbank", 132.0, 190.0, 314.9)]
+    assert _parse_batch_detail_row(row, "2026-06-26", is_debit=True) is None
+
+
+ZKB_HEADER_ROW = [
+    _word("Datum", 50.0, 82.0, 650.0),
+    _word("Buchungstext", 150.0, 210.0, 650.0),
+    _word("Belastung", 550.0, 590.0, 650.0),
+    _word("CHF", 592.0, 610.0, 650.0),
+    _word("Gutschrift", 660.0, 700.0, 650.0),
+    _word("CHF", 702.0, 720.0, 650.0),
+    _word("Valuta", 780.0, 810.0, 650.0),
+    _word("Saldo", 850.0, 880.0, 650.0),
+    _word("CHF", 900.0, 920.0, 650.0),
+]
+
+
+def test_parse_pdf_resolves_collective_booking_into_individual_transactions(tmp_path):
+    pdf_path = tmp_path / "kontoauszug.pdf"
+    c = canvas.Canvas(str(pdf_path), pagesize=(950, 700))
+    c.setFont("Helvetica", 7)
+
+    header_y = 650
+    c.drawString(50, header_y, "Datum")
+    c.drawString(150, header_y, "Buchungstext")
+    c.drawString(550, header_y, "Belastung")
+    c.drawString(610, header_y, "CHF")
+    c.drawString(660, header_y, "Gutschrift")
+    c.drawString(720, header_y, "CHF")
+    c.drawString(780, header_y, "Valuta")
+    c.drawString(850, header_y, "Saldo")
+    c.drawString(900, header_y, "CHF")
+
+    # A normal transaction before the batch — must still parse as usual.
+    row_y = 630
+    c.drawString(50, row_y, "25.06.2026")
+    c.drawString(150, row_y, "Migros Zuerich")
+    c.drawString(560, row_y, "45.90")
+
+    # The collective-booking header — its own printed total (922.60) must
+    # NEVER be imported as a transaction.
+    row_y = 610
+    c.drawString(50, row_y, "26.06.2026")
+    c.drawString(150, row_y, "Belastungen Dauerauftrag (2) Auftrags-Nr.Z261428714356")
+    c.drawString(560, row_y, "922.60")
+
+    # The two detail rows: no leading date, recipient text ending in a
+    # glued "CHF<amount>" token — real ZKB layout.
+    row_y = 590
+    c.drawString(150, row_y, "AMAG Leasing AG, Alte Steinhauserstrasse 12, 6330 Cham, CH CHF622.60")
+    row_y = 570
+    c.drawString(150, row_y, "Swiss Life AG, General-Guisan-Quai 40, 8002 Zuerich, CH CHF300.00")
+
+    c.save()
+
+    rows = parse_pdf(pdf_path)
+
+    assert rows == [
+        {"date": "2026-06-25", "description": "Migros Zuerich", "amount_cents": -4590, "currency": "CHF"},
+        {
+            "date": "2026-06-26",
+            "description": "AMAG Leasing AG, Alte Steinhauserstrasse 12, 6330 Cham, CH",
+            "amount_cents": -62260,
+            "currency": "CHF",
+        },
+        {
+            "date": "2026-06-26",
+            "description": "Swiss Life AG, General-Guisan-Quai 40, 8002 Zuerich, CH",
+            "amount_cents": -30000,
+            "currency": "CHF",
+        },
+    ]
+
+
+def test_parse_pdf_resolves_collective_booking_across_a_page_break(tmp_path):
+    # Real-world edge case: the collective-booking header lands near the
+    # bottom of a page, so its detail rows continue on the next page, after
+    # page-footer chrome that must be skipped over rather than mistaken for
+    # a missing detail row.
+    pdf_path = tmp_path / "kontoauszug.pdf"
+    c = canvas.Canvas(str(pdf_path), pagesize=(950, 700))
+    c.setFont("Helvetica", 7)
+
+    def draw_table_header():
+        c.drawString(50, 650, "Datum")
+        c.drawString(150, 650, "Buchungstext")
+        c.drawString(550, 650, "Belastung")
+        c.drawString(610, 650, "CHF")
+        c.drawString(660, 650, "Gutschrift")
+        c.drawString(720, 650, "CHF")
+        c.drawString(780, 650, "Valuta")
+        c.drawString(850, 650, "Saldo")
+        c.drawString(900, 650, "CHF")
+
+    draw_table_header()
+    c.drawString(50, 100, "26.06.2026")
+    c.drawString(150, 100, "Belastungen Dauerauftrag (2) Auftrags-Nr.Z261428714356")
+    c.drawString(560, 100, "922.60")
+    c.drawString(50, 60, "Zuercher Kantonalbank")
+    c.showPage()
+
+    c.setFont("Helvetica", 7)
+    draw_table_header()
+    c.drawString(150, 630, "AMAG Leasing AG, Alte Steinhauserstrasse 12, 6330 Cham, CH CHF622.60")
+    c.drawString(150, 610, "Swiss Life AG, General-Guisan-Quai 40, 8002 Zuerich, CH CHF300.00")
+    c.drawString(50, 590, "27.06.2026")
+    c.drawString(150, 590, "Coop Zuerich")
+    c.drawString(560, 590, "12.00")
+
+    c.save()
+
+    rows = parse_pdf(pdf_path)
+
+    assert rows == [
+        {
+            "date": "2026-06-26",
+            "description": "AMAG Leasing AG, Alte Steinhauserstrasse 12, 6330 Cham, CH",
+            "amount_cents": -62260,
+            "currency": "CHF",
+        },
+        {
+            "date": "2026-06-26",
+            "description": "Swiss Life AG, General-Guisan-Quai 40, 8002 Zuerich, CH",
+            "amount_cents": -30000,
+            "currency": "CHF",
+        },
+        {"date": "2026-06-27", "description": "Coop Zuerich", "amount_cents": -1200, "currency": "CHF"},
     ]

@@ -194,6 +194,46 @@ def _amount_in_range(word, x_range):
     return lo <= word["x0"] and word["x1"] <= hi and WORD_AMOUNT_RE.match(word["text"])
 
 
+# ZKB sometimes bundles several standing-order/eBill/mobile-banking debits
+# (or credits) collected together into one summary line — "Belastungen
+# Dauerauftrag (3) Auftrags-Nr. ..." — printed with a "(n)" count instead of
+# a single recipient, followed by n detail lines. Each detail line has no
+# date of its own (it's dated the same as the summary line) and ends in a
+# glued "CHF<amount>" token rather than an amount under the normal
+# Belastung/Gutschrift column position. The summary line's own printed
+# total must never be imported as a transaction — only its n detail lines.
+_BATCH_HEADER_RE = re.compile(r"(Belastungen|Gutschriften)\s+.+?\s*\((\d+)\)\s*Auftrags-Nr\.")
+_BATCH_DETAIL_AMOUNT_RE = re.compile(r"^CHF([+-]?\d{1,3}(?:['’]?\d{3})*\.\d{2})$")
+
+
+def _match_batch_header(row):
+    """If `row` is a collective-booking summary line, return
+    (is_debit, count); otherwise None."""
+    if not row:
+        return None
+    text = " ".join(w["text"] for w in row)
+    match = _BATCH_HEADER_RE.search(text)
+    if not match:
+        return None
+    return match.group(1) == "Belastungen", int(match.group(2))
+
+
+def _parse_batch_detail_row(row, date_iso, is_debit):
+    amount_word = next((w for w in row if _BATCH_DETAIL_AMOUNT_RE.match(w["text"])), None)
+    if amount_word is None:
+        return None
+    description = " ".join(w["text"] for w in row if w["x1"] <= amount_word["x0"]).strip()
+    if not description:
+        return None
+    magnitude = abs(_amount_to_cents(_BATCH_DETAIL_AMOUNT_RE.match(amount_word["text"]).group(1)))
+    return {
+        "date": date_iso,
+        "description": description,
+        "amount_cents": -magnitude if is_debit else magnitude,
+        "currency": "CHF",
+    }
+
+
 def _parse_columned_row(row, columns, statement_period=None):
     if not row:
         return None
@@ -238,6 +278,7 @@ def parse_pdf(file_path):
     rows = []
     columns = None
     statement_period = None
+    column_rows = []
     with _open_pdf(file_path) as pdf:
         for page in pdf.pages:
             if statement_period is None:
@@ -253,14 +294,46 @@ def parse_pdf(file_path):
                 columns = page_columns
 
             if columns:
-                for row in page_rows:
-                    parsed = _parse_columned_row(row, columns, statement_period)
-                    if parsed:
-                        rows.append(parsed)
+                # Deferred to a single flat pass below (rather than parsed
+                # immediately here) so a collective booking's detail rows
+                # can be found even when the PDF's own page break falls
+                # between the summary line and its details.
+                column_rows.extend(page_rows)
             else:
                 text = page.extract_text() or ""
                 for line in text.split("\n"):
                     parsed = _parse_line(line)
                     if parsed:
                         rows.append(parsed)
+
+    i = 0
+    while i < len(column_rows):
+        row = column_rows[i]
+        batch = _match_batch_header(row)
+        header_date = row[0]["text"] if row and WORD_DATE_RE.match(row[0]["text"]) else None
+        if batch is not None and header_date is not None:
+            is_debit, count = batch
+            date_iso = _to_iso_date(header_date, statement_period)
+            j = i + 1
+            found = 0
+            while j < len(column_rows) and found < count:
+                candidate = column_rows[j]
+                if candidate and WORD_DATE_RE.match(candidate[0]["text"]):
+                    # Ran into the next real transaction row (or another
+                    # summary line) before finding all `count` detail rows —
+                    # stop rather than misreading unrelated content as one.
+                    break
+                detail = _parse_batch_detail_row(candidate, date_iso, is_debit)
+                if detail:
+                    rows.append(detail)
+                    found += 1
+                j += 1
+            i = j
+            continue
+
+        parsed = _parse_columned_row(row, columns, statement_period)
+        if parsed:
+            rows.append(parsed)
+        i += 1
+
     return rows
