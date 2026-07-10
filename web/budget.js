@@ -41,6 +41,20 @@ function currentMonthString() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// The Budget page's month picker used to always default to today's real
+// calendar month — but statement imports lag behind (e.g. the newest
+// import only covers through last month), so "today's month" often has
+// zero bookings and the month-filtered charts (donut, top categories)
+// render empty even though plenty of data exists. Defaulting to the
+// latest month that actually has a transaction avoids that empty-on-open
+// state; falls back to the real current month for a brand-new/empty
+// database.
+function latestMonthWithData(rows) {
+  if (rows.length === 0) return currentMonthString();
+  const maxDate = rows.reduce((max, r) => (r.date > max ? r.date : max), rows[0].date);
+  return maxDate.slice(0, 7);
+}
+
 function monthRange(monthStr) {
   const [year, month] = monthStr.split("-").map(Number);
   const start = `${monthStr}-01`;
@@ -236,8 +250,7 @@ async function loadMonthData() {
   renderBudgetRows(summary.by_category, budgets);
 }
 
-async function loadCashflowTrend() {
-  const rows = await fetch("/api/transactions").then((r) => r.json());
+function renderCashflowTrend(rows) {
   const byMonth = {};
   rows.forEach((r) => {
     if (r.excluded_from_totals) return; // e.g. Kreditkarten-Ausgleich — already counted once elsewhere
@@ -319,6 +332,8 @@ document.getElementById("add-budget-btn").addEventListener("click", async () => 
 (async function init() {
   document.getElementById("budget-month").value = currentMonthString();
   await loadCategories();
+  const transactions = await fetch("/api/transactions").then((r) => r.json());
+  document.getElementById("budget-month").value = latestMonthWithData(transactions);
   await loadMonthData();
-  await loadCashflowTrend();
+  renderCashflowTrend(transactions);
 })();
