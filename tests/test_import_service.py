@@ -192,6 +192,49 @@ def test_scan_and_parse_does_not_dedupe_across_different_amounts_or_dates(tmp_pa
     assert result == {"created": 2, "duplicates_skipped": 0}
 
 
+def test_scan_and_parse_dry_run_reports_counts_without_writing_anything(tmp_path):
+    # A fail-safe preview: the caller can see what a scan WOULD do (new vs.
+    # duplicate counts) before anything lands in the database, so the UI can
+    # warn about duplicates and let the user cancel before any write happens.
+    statements_dir = tmp_path / "statements"
+    statements_dir.mkdir()
+    conn = init_db(tmp_path / "test.db")
+    conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, source, manually_corrected) "
+        "VALUES ('2026-03-01', 'Migros Zürich', -4590, 'CHF', 'a', 0)"
+    )
+    conn.commit()
+
+    (statements_dir / "b.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n"
+        "01.03.2026;Migros Zürich;-45.90;CHF\n"
+        "02.03.2026;Coop Bern;-10.00;CHF\n",
+        encoding="utf-8-sig",
+    )
+
+    result = scan_and_parse(conn, statements_dir, dry_run=True)
+
+    assert result == {"created": 1, "duplicates_skipped": 1}
+    assert conn.execute("SELECT COUNT(*) c FROM pending_transactions").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM imported_files").fetchone()["c"] == 0
+
+
+def test_scan_and_parse_dry_run_then_real_run_produce_the_same_result(tmp_path):
+    statements_dir = tmp_path / "statements"
+    statements_dir.mkdir()
+    (statements_dir / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    conn = init_db(tmp_path / "test.db")
+
+    preview = scan_and_parse(conn, statements_dir, dry_run=True)
+    real = scan_and_parse(conn, statements_dir)
+
+    assert preview == real == {"created": 1, "duplicates_skipped": 0}
+    assert conn.execute("SELECT COUNT(*) c FROM pending_transactions").fetchone()["c"] == 1
+
+
 def test_scan_and_parse_skips_categorization_when_disabled(tmp_path):
     statements_dir = tmp_path / "statements"
     statements_dir.mkdir()

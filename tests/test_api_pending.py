@@ -65,6 +65,26 @@ def test_scan_endpoint_reports_duplicates_skipped_on_rescan_under_new_filename(c
     assert len(client.get("/api/pending").get_json()) == 2
 
 
+def test_scan_endpoint_dry_run_reports_counts_without_creating_pending_rows(client, tmp_path):
+    _write_sample_csv(tmp_path)
+
+    response = client.post("/api/scan?dry_run=true")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0}
+    assert client.get("/api/pending").get_json() == []
+
+
+def test_scan_endpoint_dry_run_then_real_scan_still_creates_pending_rows(client, tmp_path):
+    _write_sample_csv(tmp_path)
+
+    client.post("/api/scan?dry_run=true")
+    response = client.post("/api/scan")
+
+    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0}
+    assert len(client.get("/api/pending").get_json()) == 1
+
+
 def test_pending_list_reflects_scanned_rows(client, tmp_path):
     _write_sample_csv(tmp_path)
     client.post("/api/scan")

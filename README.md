@@ -45,6 +45,13 @@ klappt die Seitenleiste automatisch zu einer schmalen Icon-Leiste zusammen.
 1. Neue Kontoauszüge (PDF/CSV) nach `statements/` kopieren (Unterordner pro
    Bank/Konto sind erlaubt, z.B. `statements/ZKB/`).
 2. Unter "Import" (Seitenleiste) auf "Neue Dateien importieren" klicken.
+   Bereits importierte Dateien (per Hash erkannt) werden automatisch
+   übersprungen. Enthält der Scan zusätzlich einzelne Buchungen, die
+   (gleicher Betrag, gleiche Beschreibung, gleiches Datum) schon
+   vorhanden sind, erscheint vor dem eigentlichen Import eine Warnung mit
+   der Anzahl gefundener Duplikate und neuer Buchungen — "Import
+   fortsetzen" importiert nur die neuen Buchungen, "Import abbrechen"
+   importiert nichts.
 3. Erkannte Buchungen in der Korrektur-Tabelle prüfen und Kategorie/Betrag/
    Datum bei Bedarf anpassen.
 4. "Import bestätigen" klicken — Buchungen erscheinen im Dashboard

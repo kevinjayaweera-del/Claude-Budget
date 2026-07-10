@@ -149,6 +149,31 @@ function showScanStatus(newPending, duplicatesSkipped) {
 }
 
 document.getElementById("scan-btn").addEventListener("click", async () => {
+  // Fail-safe against duplicate imports: preview what a scan would do
+  // (dry_run=true writes nothing) so we can warn before anything lands in
+  // the pending queue. Only worth asking when there's an actual choice —
+  // some new bookings AND some duplicates — otherwise just proceed (a
+  // scan that's either all-new or all-duplicate has nothing to decide).
+  const previewRes = await fetch("/api/scan?dry_run=true", { method: "POST" });
+  if (!previewRes.ok) {
+    alert("Fehler beim Scannen — bitte erneut versuchen.");
+    return;
+  }
+  const preview = await previewRes.json();
+
+  if (preview.duplicates_skipped > 0 && preview.new_pending > 0) {
+    const proceed = confirm(
+      `${preview.duplicates_skipped} Dopplung(en) gefunden, ${preview.new_pending} neue Buchung(en). ` +
+      "Import fortsetzen? Nur die neuen Buchungen werden importiert, Duplikate werden übersprungen."
+    );
+    if (!proceed) {
+      const status = document.getElementById("scan-status");
+      status.textContent = "Import abgebrochen — es wurde nichts importiert.";
+      status.classList.remove("hidden");
+      return;
+    }
+  }
+
   const res = await fetch("/api/scan", { method: "POST" });
   if (!res.ok) {
     alert("Fehler beim Scannen — bitte erneut versuchen.");

@@ -150,8 +150,12 @@ def register_routes(app):
 
     @app.route("/api/scan", methods=["POST"])
     def scan():
+        # ?dry_run=true previews what a scan would do (new vs. duplicate
+        # counts) without writing anything — used to warn about duplicates
+        # and let the user cancel before any pending rows are created.
+        dry_run = request.args.get("dry_run") == "true"
         conn = get_db()
-        result = scan_and_parse(conn, current_app.config["STATEMENTS_DIR"])
+        result = scan_and_parse(conn, current_app.config["STATEMENTS_DIR"], dry_run=dry_run)
         conn.close()
         return jsonify({
             "new_pending": result["created"],

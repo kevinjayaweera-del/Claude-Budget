@@ -41,7 +41,17 @@ def _auto_categorize_enabled(conn):
     return row is None or row["value"] == "true"
 
 
-def scan_and_parse(conn, statements_dir):
+def scan_and_parse(conn, statements_dir, dry_run=False):
+    """Scan statements_dir for new files and stage their non-duplicate rows
+    as pending transactions.
+
+    With dry_run=True, computes and returns the exact same counts (files are
+    still parsed, and duplicate-detection still runs against the current
+    database state) but performs no writes at all — no imported_files row,
+    no pending_transactions rows, no commit. This lets a caller preview a
+    scan (e.g. to warn about duplicates and let the user cancel) before
+    anything is persisted.
+    """
     statements_dir = Path(statements_dir)
     created = 0
     duplicates_skipped = 0
@@ -71,12 +81,14 @@ def scan_and_parse(conn, statements_dir):
                 else path.stem
             )
 
-            cursor = conn.execute(
-                "INSERT INTO imported_files (hash, filename, source, imported_at) "
-                "VALUES (?, ?, ?, datetime('now'))",
-                (file_hash, path.name, source),
-            )
-            file_id = cursor.lastrowid
+            file_id = None
+            if not dry_run:
+                cursor = conn.execute(
+                    "INSERT INTO imported_files (hash, filename, source, imported_at) "
+                    "VALUES (?, ?, ?, datetime('now'))",
+                    (file_hash, path.name, source),
+                )
+                file_id = cursor.lastrowid
 
             keys = [
                 (row["date"], row["description"], row["amount_cents"], row["currency"])
@@ -100,28 +112,31 @@ def scan_and_parse(conn, statements_dir):
                     file_duplicates += 1
                     continue
 
-                if auto_categorize:
-                    category_id, confidence, rule_id = categorizer.predict(
-                        row["description"], row["amount_cents"], row["currency"], source
+                if not dry_run:
+                    if auto_categorize:
+                        category_id, confidence, rule_id = categorizer.predict(
+                            row["description"], row["amount_cents"], row["currency"], source
+                        )
+                    else:
+                        category_id, confidence, rule_id = uncategorized_id, None, None
+                    conn.execute(
+                        "INSERT INTO pending_transactions "
+                        "(date, description, amount_cents, currency, category_id, source, file_id, "
+                        " suggested_category_id, suggested_rule_id, category_confidence) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (row["date"], row["description"], row["amount_cents"],
+                         row["currency"], category_id, source, file_id,
+                         category_id, rule_id, confidence if rule_id is not None else None),
                     )
-                else:
-                    category_id, confidence, rule_id = uncategorized_id, None, None
-                conn.execute(
-                    "INSERT INTO pending_transactions "
-                    "(date, description, amount_cents, currency, category_id, source, file_id, "
-                    " suggested_category_id, suggested_rule_id, category_confidence) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (row["date"], row["description"], row["amount_cents"],
-                     row["currency"], category_id, source, file_id,
-                     category_id, rule_id, confidence if rule_id is not None else None),
-                )
                 file_created += 1
         except Exception as exc:
-            conn.rollback()
+            if not dry_run:
+                conn.rollback()
             print(f"Skipping {path.name}: {exc}", file=sys.stderr)
             continue
 
-        conn.commit()
+        if not dry_run:
+            conn.commit()
         created += file_created
         duplicates_skipped += file_duplicates
 
