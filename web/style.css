@@ -480,6 +480,32 @@ td.amount.debit { color: var(--debit); }
 .confidence-dot.high { background: var(--confidence-high); }
 .confidence-dot.low { background: var(--confidence-low); }
 
+/* ---------- Rules page (grouped by category) ---------- */
+.rules-group-header-row {
+  cursor: pointer;
+  background: var(--surface-sunken);
+}
+.rules-group-header-row:hover { background: var(--line); }
+.rules-group-header-row td {
+  padding: 0.6rem 1rem;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.rules-group-chevron {
+  display: inline-block;
+  width: 1em;
+  margin-right: 0.4rem;
+  color: var(--ink-faint);
+}
+.rules-group-count {
+  font-weight: 400;
+  color: var(--ink-faint);
+  margin-left: 0.5rem;
+}
+.rules-group.collapsed .rules-row { display: none; }
+
 /* ---------- Correction ledger (pending review) ---------- */
 #pending-section {
   margin-bottom: 2rem;
