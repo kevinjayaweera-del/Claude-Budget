@@ -187,6 +187,22 @@ def test_confirm_import_moves_rows_to_transactions_and_clears_pending(client, tm
     assert client.get("/api/pending").get_json() == []
 
 
+def test_confirm_import_carries_account_id_to_transactions(client, tmp_path):
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+    pending_account_id = get_connection(tmp_path / "test.db").execute(
+        "SELECT account_id FROM pending_transactions"
+    ).fetchone()["account_id"]
+    assert pending_account_id is not None
+
+    client.post("/api/import/confirm")
+
+    txn_account_id = get_connection(tmp_path / "test.db").execute(
+        "SELECT account_id FROM transactions"
+    ).fetchone()["account_id"]
+    assert txn_account_id == pending_account_id
+
+
 def test_confirm_import_preserves_non_chf_currency(client, tmp_path):
     """Regression test for the currency-clobbering bug: the PUT that saves a
     pending row's edits must preserve whatever currency it is sent (this is

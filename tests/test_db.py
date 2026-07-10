@@ -1,6 +1,9 @@
 import sqlite3
 
-from server.db import init_db, reset_db, reset_imported_data, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_RULES
+from server.db import (
+    init_db, reset_db, reset_imported_data, get_or_create_account,
+    DEFAULT_CATEGORIES, DEFAULT_CATEGORY_RULES,
+)
 from server.categorize import RuleBasedCategorizer
 
 
@@ -503,6 +506,119 @@ def test_reset_db_clears_budgets(tmp_path):
     conn = reset_db(db_path)
 
     assert conn.execute("SELECT COUNT(*) c FROM budgets").fetchone()["c"] == 0
+    conn.close()
+
+
+def test_init_db_creates_accounts_tags_tables(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+
+    tables = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    assert {"accounts", "tags", "transaction_tags"}.issubset(tables)
+    conn.close()
+
+
+def test_get_or_create_account_creates_then_reuses_by_source_key(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+
+    first_id = get_or_create_account(conn, "ZKB")
+    second_id = get_or_create_account(conn, "ZKB")
+    other_id = get_or_create_account(conn, "Cornercard")
+
+    assert first_id == second_id
+    assert first_id != other_id
+    row = conn.execute("SELECT name FROM accounts WHERE id = ?", (first_id,)).fetchone()
+    assert row["name"] == "ZKB"
+    conn.close()
+
+
+def test_init_db_backfills_account_id_for_pre_existing_rows(tmp_path):
+    # Simulates a database from before the accounts table existed: rows
+    # already have a `source` string but no account_id yet.
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    lebensmittel_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Lebensmittel'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, category_id, source, manually_corrected) "
+        "VALUES ('2026-03-01', 'Testausgabe', -1000, 'CHF', ?, 'ZKB', 0)",
+        (lebensmittel_id,),
+    )
+    conn.execute(
+        "INSERT INTO pending_transactions (date, description, amount_cents, currency, category_id, source) "
+        "VALUES ('2026-03-02', 'Noch offen', -500, 'CHF', ?, 'ZKB')",
+        (lebensmittel_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)  # second call must backfill the NULL account_ids
+
+    txn = conn.execute("SELECT account_id FROM transactions WHERE description = 'Testausgabe'").fetchone()
+    pending = conn.execute("SELECT account_id FROM pending_transactions WHERE description = 'Noch offen'").fetchone()
+    assert txn["account_id"] is not None
+    assert txn["account_id"] == pending["account_id"]
+    account = conn.execute("SELECT source_key, name FROM accounts WHERE id = ?", (txn["account_id"],)).fetchone()
+    assert account["source_key"] == "ZKB"
+    assert account["name"] == "ZKB"
+    conn.close()
+
+
+def test_init_db_backfill_never_overwrites_an_existing_account_id(tmp_path):
+    # A row someone (or a rename) already pointed at a specific account
+    # must not be silently reassigned on the next init_db() call — the
+    # backfill only fills in NULLs.
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    lebensmittel_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Lebensmittel'"
+    ).fetchone()["id"]
+    other_account_id = get_or_create_account(conn, "Anderes Konto")
+    conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, category_id, source, account_id, manually_corrected) "
+        "VALUES ('2026-03-01', 'Testausgabe', -1000, 'CHF', ?, 'ZKB', ?, 0)",
+        (lebensmittel_id, other_account_id),
+    )
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)
+
+    txn = conn.execute("SELECT account_id FROM transactions WHERE description = 'Testausgabe'").fetchone()
+    assert txn["account_id"] == other_account_id
+    conn.close()
+
+
+def test_reset_db_clears_accounts_and_tags(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    get_or_create_account(conn, "ZKB")
+    conn.execute("INSERT INTO tags (name) VALUES ('Urlaub')")
+    conn.commit()
+    conn.close()
+
+    conn = reset_db(db_path)
+
+    assert conn.execute("SELECT COUNT(*) c FROM accounts").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM tags").fetchone()["c"] == 0
+    conn.close()
+
+
+def test_reset_imported_data_clears_accounts_but_keeps_tags(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    get_or_create_account(conn, "ZKB")
+    conn.execute("INSERT INTO tags (name) VALUES ('Urlaub')")
+    conn.commit()
+    conn.close()
+
+    conn = reset_imported_data(db_path)
+
+    assert conn.execute("SELECT COUNT(*) c FROM accounts").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM tags").fetchone()["c"] == 1
     conn.close()
 
 

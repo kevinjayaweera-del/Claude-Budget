@@ -5,6 +5,7 @@ from server.file_hash import hash_file
 from server.parsers.csv_parser import parse_csv
 from server.parsers.pdf_parser import parse_pdf
 from server.categorize import RuleBasedCategorizer
+from server.db import get_or_create_account
 
 
 def _existing_counts(conn, keys):
@@ -82,6 +83,7 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
             )
 
             file_id = None
+            account_id = None
             if not dry_run:
                 cursor = conn.execute(
                     "INSERT INTO imported_files (hash, filename, source, imported_at) "
@@ -89,6 +91,7 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
                     (file_hash, path.name, source),
                 )
                 file_id = cursor.lastrowid
+                account_id = get_or_create_account(conn, source)
 
             keys = [
                 (row["date"], row["description"], row["amount_cents"], row["currency"])
@@ -122,10 +125,10 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
                     conn.execute(
                         "INSERT INTO pending_transactions "
                         "(date, description, amount_cents, currency, category_id, source, file_id, "
-                        " suggested_category_id, suggested_rule_id, category_confidence) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        " account_id, suggested_category_id, suggested_rule_id, category_confidence) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (row["date"], row["description"], row["amount_cents"],
-                         row["currency"], category_id, source, file_id,
+                         row["currency"], category_id, source, file_id, account_id,
                          category_id, rule_id, confidence if rule_id is not None else None),
                     )
                 file_created += 1

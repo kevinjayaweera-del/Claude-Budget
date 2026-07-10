@@ -24,6 +24,44 @@ def test_scan_and_parse_creates_pending_rows_and_marks_file_imported(tmp_path):
     assert len(files) == 1
 
 
+def test_scan_and_parse_sets_account_id_matching_source(tmp_path):
+    statements_dir = tmp_path / "statements"
+    (statements_dir / "ZKB").mkdir(parents=True)
+    (statements_dir / "ZKB" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    conn = init_db(tmp_path / "test.db")
+
+    scan_and_parse(conn, statements_dir)
+
+    pending = conn.execute("SELECT account_id FROM pending_transactions").fetchone()
+    assert pending["account_id"] is not None
+    account = conn.execute("SELECT source_key, name FROM accounts WHERE id = ?", (pending["account_id"],)).fetchone()
+    assert account["source_key"] == "ZKB"
+    assert account["name"] == "ZKB"
+
+
+def test_scan_and_parse_reuses_same_account_across_files(tmp_path):
+    statements_dir = tmp_path / "statements"
+    (statements_dir / "ZKB").mkdir(parents=True)
+    (statements_dir / "ZKB" / "a.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Migros Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    (statements_dir / "ZKB" / "b.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n02.03.2026;Coop Bern;-12.30;CHF\n",
+        encoding="utf-8-sig",
+    )
+    conn = init_db(tmp_path / "test.db")
+
+    scan_and_parse(conn, statements_dir)
+
+    account_ids = {row["account_id"] for row in conn.execute("SELECT account_id FROM pending_transactions")}
+    assert len(account_ids) == 1
+    assert conn.execute("SELECT COUNT(*) c FROM accounts").fetchone()["c"] == 1
+
+
 def test_scan_and_parse_skips_already_imported_files(tmp_path):
     statements_dir = tmp_path / "statements"
     statements_dir.mkdir()

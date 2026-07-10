@@ -256,10 +256,10 @@ def register_routes(app):
 
             conn.execute(
                 "INSERT INTO transactions "
-                "(date, description, amount_cents, currency, category_id, source, file_id, manually_corrected) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(date, description, amount_cents, currency, category_id, source, file_id, account_id, manually_corrected) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (row["date"], row["description"], row["amount_cents"], row["currency"],
-                 final_category_id, row["source"], row["file_id"], manually_corrected),
+                 final_category_id, row["source"], row["file_id"], row["account_id"], manually_corrected),
             )
         if ids:
             placeholders = ",".join("?" for _ in ids)

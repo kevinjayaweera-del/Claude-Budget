@@ -54,6 +54,30 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- source_key is the immutable identifier import derives from the
+-- filename/folder (see import_service.py) — an account row is looked up
+-- or created by source_key at import time. name is the user-editable
+-- display name (defaults to source_key), so renaming an account doesn't
+-- break the link back to future re-imports of the same source folder.
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_key TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+
+-- Tags apply to confirmed transactions only, not pending rows — tagging is
+-- a post-review organizational step, not part of the import/categorize flow.
+CREATE TABLE IF NOT EXISTS transaction_tags (
+    transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (transaction_id, tag_id)
+);
 """
 
 # Stored as strings (settings.value is TEXT) and parsed by the API layer —
@@ -78,6 +102,8 @@ MIGRATIONS = [
     ("pending_transactions", "suggested_rule_id", "INTEGER REFERENCES category_rules(id)"),
     ("pending_transactions", "category_confidence", "REAL"),
     ("categories", "excluded_from_totals", "INTEGER NOT NULL DEFAULT 0"),
+    ("transactions", "account_id", "INTEGER REFERENCES accounts(id)"),
+    ("pending_transactions", "account_id", "INTEGER REFERENCES accounts(id)"),
 ]
 
 # Categories seeded with excluded_from_totals=1 — money movement that isn't
@@ -472,21 +498,64 @@ def init_db(db_path):
         "WHERE keyword = 'saldovortrag' AND category_id = ?",
         (kreditkarten_ausgleich_id, sonstiges_id),
     )
+    _backfill_accounts(conn)
     conn.commit()
     return conn
 
 
+def get_or_create_account(conn, source_key):
+    """Look up the account for a source_key (the filename/folder-derived
+    string import_service.py already computes as `source`), creating it
+    with name=source_key on first sight. Renaming an account only changes
+    its display name, so it keeps resolving to the same row on future
+    re-imports of that source."""
+    row = conn.execute(
+        "SELECT id FROM accounts WHERE source_key = ?", (source_key,)
+    ).fetchone()
+    if row:
+        return row["id"]
+    cursor = conn.execute(
+        "INSERT INTO accounts (source_key, name) VALUES (?, ?)",
+        (source_key, source_key),
+    )
+    return cursor.lastrowid
+
+
+def _backfill_accounts(conn):
+    """Create an account for every distinct `source` string already present
+    in transactions/pending_transactions (e.g. from before the accounts
+    table existed, or rows inserted by code that hasn't been updated to set
+    account_id directly) and point account_id at it. Only fills in NULLs —
+    never overwrites an existing account_id — so it's safe to run on every
+    init_db() call without disturbing a row someone reassigned."""
+    sources = set()
+    for table in ("transactions", "pending_transactions"):
+        for row in conn.execute(f"SELECT DISTINCT source FROM {table} WHERE account_id IS NULL"):
+            sources.add(row["source"])
+    for source in sources:
+        account_id = get_or_create_account(conn, source)
+        for table in ("transactions", "pending_transactions"):
+            conn.execute(
+                f"UPDATE {table} SET account_id = ? WHERE source = ? AND account_id IS NULL",
+                (account_id, source),
+            )
+
+
 def reset_db(db_path):
     """Wipe all data (transactions, pending rows, imported-file records,
-    learned/seeded rules, categories) and reseed the defaults — a clean-slate
-    reset for repeated test imports, not a normal-operation code path."""
+    learned/seeded rules, categories, accounts, tags) and reseed the
+    defaults — a clean-slate reset for repeated test imports, not a
+    normal-operation code path."""
     conn = get_connection(db_path)
+    conn.execute("DELETE FROM transaction_tags")
+    conn.execute("DELETE FROM tags")
     conn.execute("DELETE FROM transactions")
     conn.execute("DELETE FROM pending_transactions")
     conn.execute("DELETE FROM imported_files")
     conn.execute("DELETE FROM category_rules")
     conn.execute("DELETE FROM budgets")
     conn.execute("DELETE FROM categories")
+    conn.execute("DELETE FROM accounts")
     conn.execute("DELETE FROM settings")
     conn.commit()
     conn.close()
@@ -495,13 +564,16 @@ def reset_db(db_path):
 
 def reset_imported_data(db_path):
     """Wipe only what an import produced (transactions, pending rows,
-    imported-file records) so statements can be rescanned from scratch —
-    unlike reset_db(), this leaves categories, learned/seeded rules,
-    budgets and settings untouched. Meant for repeatedly re-testing imports
-    without losing the categorization the user has already trained."""
+    imported-file records, accounts — accounts are re-derived from source
+    on the next scan) so statements can be rescanned from scratch — unlike
+    reset_db(), this leaves categories, learned/seeded rules, budgets, tags
+    and settings untouched. Meant for repeatedly re-testing imports without
+    losing the categorization the user has already trained."""
     conn = get_connection(db_path)
+    conn.execute("DELETE FROM transaction_tags")
     conn.execute("DELETE FROM transactions")
     conn.execute("DELETE FROM pending_transactions")
     conn.execute("DELETE FROM imported_files")
+    conn.execute("DELETE FROM accounts")
     conn.commit()
     return conn
