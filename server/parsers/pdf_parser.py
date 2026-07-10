@@ -124,8 +124,17 @@ def _parse_line(line):
         return None
 
     raw_amount = amount_match.group(1)
-    amount_cents = _amount_to_cents(raw_amount)
-    if raw_amount[0] not in "+-":
+    if raw_amount[0] in "+-":
+        # An explicit sign on these statements marks a refund/partial
+        # reversal — e.g. "-231.20" for a merchant crediting back part of an
+        # earlier charge — which is the OPPOSITE of the unsigned default
+        # below (always a debit), not an already-signed amount in our own
+        # convention. Verified against a real Swisscard statement: the
+        # printed "Total der Transaktionen" for the card matches only when
+        # this line is netted in as a credit, not counted as a second debit.
+        amount_cents = abs(_amount_to_cents(raw_amount))
+    else:
+        amount_cents = _amount_to_cents(raw_amount)
         is_payment = any(keyword in description.lower() for keyword in _PAYMENT_KEYWORDS)
         if not is_payment:
             amount_cents = -amount_cents

@@ -20,13 +20,24 @@ def _word(text, x0, x1, top):
 
 
 def test_parse_line_extracts_date_description_amount():
-    result = _parse_line("01.03.2026 Migros Zürich -45.90")
+    result = _parse_line("01.03.2026 Migros Zürich 45.90")
     assert result == {
         "date": "2026-03-01",
         "description": "Migros Zürich",
         "amount_cents": -4590,
         "currency": "CHF",
     }
+
+
+def test_parse_line_explicit_minus_sign_is_a_refund_not_a_debit():
+    # Verified against a real Swisscard statement: a bare amount on these
+    # card-statement lines always means a debit (see the unsigned-negation
+    # branch above), so an explicit "-" is the opposite of that default — a
+    # partial merchant refund — and must be stored positive. The statement's
+    # own printed "Total der Transaktionen" subtotal only reconciles when
+    # this line is netted in as a credit, not double-counted as a debit.
+    result = _parse_line("01.04.2026 Spreebok EU, Amsterdam -231.20")
+    assert result["amount_cents"] == 23120
 
 
 def test_parse_line_returns_none_when_no_date():
@@ -121,7 +132,7 @@ def test_parse_pdf_extracts_transactions_from_real_pdf(tmp_path):
     pdf_path = tmp_path / "statement.pdf"
     c = canvas.Canvas(str(pdf_path))
     c.drawString(50, 800, "Kontoauszug März 2026")
-    c.drawString(50, 780, "01.03.2026 Migros Zuerich -45.90")
+    c.drawString(50, 780, "01.03.2026 Migros Zuerich 45.90")
     c.drawString(50, 760, "03.03.2026 Spotify Stockholm 22.50")
     c.drawString(50, 740, "05.03.2026 Ihre Zahlung-Besten Dank 5200.00")
     c.save()
@@ -483,7 +494,7 @@ def test_parse_pdf_falls_back_to_pypdf_decrypt_when_pdfplumber_open_fails(tmp_pa
     pdf_path = tmp_path / "statement.pdf"
     c = canvas.Canvas(str(pdf_path))
     c.drawString(50, 800, "Kontoauszug März 2026")
-    c.drawString(50, 780, "01.03.2026 Migros Zuerich -45.90")
+    c.drawString(50, 780, "01.03.2026 Migros Zuerich 45.90")
     c.save()
 
     import pdfplumber as pdfplumber_module

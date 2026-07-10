@@ -20,7 +20,13 @@
   <div class="page">
 
     <header class="app-header">
-      <p class="app-title">Import</p>
+      <div class="app-header-title-group">
+        <p class="app-title">Import</p>
+        <span id="pending-count-badge" class="pending-count-badge hidden">
+          <span id="pending-count-value" class="pending-count-value">0</span>
+          <span class="pending-count-label">Buchungen zu prüfen</span>
+        </span>
+      </div>
       <button id="scan-btn" class="btn btn-primary" type="button">Neue Dateien importieren</button>
     </header>
 

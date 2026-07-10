@@ -34,6 +34,12 @@ function updateEmptyState(hasPending) {
   document.getElementById("import-empty-state").classList.toggle("hidden", hasPending);
 }
 
+function updatePendingCountBadge(total) {
+  const badge = document.getElementById("pending-count-badge");
+  document.getElementById("pending-count-value").textContent = total;
+  badge.classList.toggle("hidden", total === 0);
+}
+
 async function loadPending() {
   const res = await fetch("/api/pending");
   const rows = await res.json();
@@ -45,6 +51,7 @@ async function loadPending() {
   autoAcceptedPendingIds = [];
 
   updateEmptyState(rows.length > 0);
+  updatePendingCountBadge(rows.length);
   if (rows.length === 0) {
     section.classList.add("hidden");
     return;
