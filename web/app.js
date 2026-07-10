@@ -137,11 +137,21 @@ async function loadTransactions() {
           ${assignableTags.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("")}
         </select>`
       : "";
+    const categoryOptions = categories.map((c) => `
+      <option value="${c.id}" ${c.id === row.category_id ? "selected" : ""}>${escapeHtml(c.name)}</option>
+    `).join("");
     tr.dataset.transactionId = row.id;
     tr.innerHTML = `
       <td class="date mono">${escapeHtml(formatDateSwiss(row.date))}</td>
       <td class="desc">${escapeHtml(row.description)}</td>
-      <td><span class="chip"><span class="dot" style="background: ${color}"></span>${escapeHtml(categoryName)}</span></td>
+      <td>
+        <span class="chip chip-editable" data-action="category-chip">
+          <span class="dot" style="background: ${color}"></span>
+          <select class="category-edit-select" data-action="edit-category" data-prev-value="${row.category_id ?? ""}" aria-label="Kategorie ändern">
+            ${categoryOptions}
+          </select>
+        </span>
+      </td>
       <td>${escapeHtml(row.source)}</td>
       <td><div class="tag-chip-list">${tagChips}${addTagSelect}</div></td>
       <td class="amount ${isCredit ? "credit" : "debit"} tabular">${sign}${amountStr}${currencyTag}</td>
@@ -149,6 +159,37 @@ async function loadTransactions() {
     tbody.appendChild(tr);
   });
 }
+
+document.querySelector("#transactions-table tbody").addEventListener("change", async (event) => {
+  if (event.target.dataset.action !== "edit-category") return;
+  const select = event.target;
+  const chip = select.closest(".chip");
+  const tr = select.closest("tr");
+  const transactionId = tr.dataset.transactionId;
+  const newCategoryId = parseInt(select.value, 10);
+  const prevValue = select.dataset.prevValue;
+
+  select.disabled = true;
+  const res = await fetch(`/api/transactions/${transactionId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category_id: newCategoryId }),
+  });
+  select.disabled = false;
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(body.error || "Fehler beim Ändern der Kategorie.");
+    select.value = prevValue;
+    return;
+  }
+  const result = await res.json();
+  select.dataset.prevValue = String(newCategoryId);
+  chip.querySelector(".dot").style.background = categoryColor(result.category_name);
+  chip.classList.remove("chip-saved");
+  void chip.offsetWidth; // restart the flash animation on repeated edits
+  chip.classList.add("chip-saved");
+});
 
 document.querySelector("#transactions-table tbody").addEventListener("click", async (event) => {
   if (event.target.dataset.action !== "remove-tag") return;

@@ -717,6 +717,41 @@ def register_routes(app):
         conn.close()
         return jsonify(result)
 
+    @app.route("/api/transactions/<int:transaction_id>", methods=["PUT"])
+    def update_transaction_category(transaction_id):
+        data = request.get_json(silent=True)
+        if data is None or "category_id" not in data:
+            return jsonify({"error": "request body must include category_id"}), 400
+        category_id = data["category_id"]
+        conn = get_db()
+        try:
+            txn = conn.execute(
+                "SELECT id, description FROM transactions WHERE id = ?", (transaction_id,)
+            ).fetchone()
+            if txn is None:
+                return jsonify({"error": "transaction not found"}), 404
+            category = conn.execute(
+                "SELECT id, name FROM categories WHERE id = ?", (category_id,)
+            ).fetchone()
+            if category is None:
+                return jsonify({"error": "category not found"}), 404
+
+            conn.execute(
+                "UPDATE transactions SET category_id = ?, manually_corrected = 1 WHERE id = ?",
+                (category_id, transaction_id),
+            )
+            # A manual re-categorization from the ledger is always a
+            # deliberate correction — feed it back into the rule engine the
+            # same way a corrected import-confirm row is (see
+            # confirm_import), so future imports of similar descriptions
+            # benefit. Never learn "Unkategorisiert" as a target.
+            if category["name"] != "Unkategorisiert":
+                RuleBasedCategorizer(conn).learn(txn["description"], category_id, was_correction=True)
+            conn.commit()
+            return jsonify({"ok": True, "category_id": category_id, "category_name": category["name"]})
+        finally:
+            conn.close()
+
     @app.route("/api/transactions", methods=["DELETE"])
     def delete_transactions():
         # Bulk delete scoped by the SAME filters GET /api/transactions

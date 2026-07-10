@@ -177,6 +177,96 @@ def test_summary_respects_category_filter(client_with_data):
     }
 
 
+def test_update_transaction_category_changes_category_and_flags_manual(client_with_data):
+    rows = client_with_data.get("/api/transactions").get_json()
+    txn = next(r for r in rows if r["description"] == "Musterladen Zürich")
+    categories = {c["name"]: c["id"] for c in client_with_data.get("/api/categories").get_json()}
+    lebensmittel_id = categories["Lebensmittel"]
+
+    response = client_with_data.put(
+        f"/api/transactions/{txn['id']}", json={"category_id": lebensmittel_id}
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "category_id": lebensmittel_id, "category_name": "Lebensmittel"}
+    updated = next(
+        r for r in client_with_data.get("/api/transactions").get_json() if r["id"] == txn["id"]
+    )
+    assert updated["category_id"] == lebensmittel_id
+
+    conn = get_connection(client_with_data.application.config["DB_PATH"])
+    manually_corrected = conn.execute(
+        "SELECT manually_corrected FROM transactions WHERE id = ?", (txn["id"],)
+    ).fetchone()["manually_corrected"]
+    conn.close()
+    assert manually_corrected == 1
+
+
+def test_update_transaction_category_learns_a_rule(client_with_data):
+    rows = client_with_data.get("/api/transactions").get_json()
+    txn = next(r for r in rows if r["description"] == "Musterladen Zürich")
+    categories = {c["name"]: c["id"] for c in client_with_data.get("/api/categories").get_json()}
+    lebensmittel_id = categories["Lebensmittel"]
+
+    client_with_data.put(f"/api/transactions/{txn['id']}", json={"category_id": lebensmittel_id})
+
+    conn = get_connection(client_with_data.application.config["DB_PATH"])
+    rule = conn.execute(
+        "SELECT category_id FROM category_rules WHERE keyword = 'musterladen'"
+    ).fetchone()
+    conn.close()
+    assert rule is not None
+    assert rule["category_id"] == lebensmittel_id
+
+
+def test_update_transaction_category_does_not_learn_uncategorized(client_with_data):
+    rows = client_with_data.get("/api/transactions").get_json()
+    txn = next(r for r in rows if r["description"] == "Lohn April")
+    categories = {c["name"]: c["id"] for c in client_with_data.get("/api/categories").get_json()}
+    unkategorisiert_id = categories["Unkategorisiert"]
+
+    client_with_data.put(f"/api/transactions/{txn['id']}", json={"category_id": unkategorisiert_id})
+
+    # _extract_keyword() picks the longest word in the normalized
+    # description ("lohn april" -> "april", 5 chars beats "lohn"'s 4) — the
+    # guard must skip learning entirely, so neither word gets a new rule.
+    conn = get_connection(client_with_data.application.config["DB_PATH"])
+    rule = conn.execute(
+        "SELECT id FROM category_rules WHERE keyword IN ('lohn', 'april')"
+    ).fetchone()
+    conn.close()
+    assert rule is None
+
+
+def test_update_transaction_category_missing_body_field_returns_400(client_with_data):
+    rows = client_with_data.get("/api/transactions").get_json()
+    txn_id = rows[0]["id"]
+
+    response = client_with_data.put(f"/api/transactions/{txn_id}", json={})
+
+    assert response.status_code == 400
+    assert "error" in response.get_json()
+
+
+def test_update_transaction_category_unknown_transaction_returns_404(client_with_data):
+    categories = {c["name"]: c["id"] for c in client_with_data.get("/api/categories").get_json()}
+
+    response = client_with_data.put(
+        "/api/transactions/999999", json={"category_id": categories["Lebensmittel"]}
+    )
+
+    assert response.status_code == 404
+
+
+def test_update_transaction_category_unknown_category_returns_404(client_with_data):
+    rows = client_with_data.get("/api/transactions").get_json()
+    txn_id = rows[0]["id"]
+
+    response = client_with_data.put(f"/api/transactions/{txn_id}", json={"category_id": 999999})
+
+    assert response.status_code == 404
+
+
 @pytest.fixture
 def client_with_settlement(tmp_path):
     # A checking-account import (Lohn + Migros) plus a credit-card

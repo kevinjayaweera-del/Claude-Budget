@@ -488,6 +488,31 @@ td.amount.debit { color: var(--debit); }
 }
 .chip .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 
+.chip-editable {
+  padding-right: 0.3rem;
+  transition: background-color 0.6s ease;
+}
+.chip-editable:hover, .chip-editable:focus-within {
+  background: var(--line);
+}
+.category-edit-select {
+  appearance: auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.category-edit-select:focus-visible { outline: none; }
+.chip-saved { animation: chip-saved-flash 0.9s ease; }
+@keyframes chip-saved-flash {
+  0% { background: var(--confidence-high); color: var(--accent-ink); }
+  100% { background: var(--surface-sunken); color: var(--ink-soft); }
+}
+
 .confidence-dot {
   display: inline-block;
   width: 8px;
