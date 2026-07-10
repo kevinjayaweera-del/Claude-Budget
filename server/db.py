@@ -185,6 +185,13 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # Cornercard glues "Companys" (a tapas-bar chain) directly onto the
         # city with no space, same issue as "pizzafalcone" above.
         "companyszuerich",
+        # Kevin identified these four as restaurants after they showed up
+        # too ambiguous to guess in the second mining pass — "Bankhaus
+        # Metzler" and "Hauptsitz Postfinance" read like banking/postal
+        # institutions but are actually restaurant names at those
+        # locations; "Reinhard AG" likewise.
+        "bankhausmetzler", "bankhaus metzler", "reinhard ag",
+        "hauptsitz postfinance",
     ],
     "Transport": [
         "sbb", "sbb mobile", "tankstell", "parkingpay", "taxifahrt",
@@ -361,6 +368,9 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # primary-school-district payment.
         "rundung", "jahresbeitrag", "corporatebenefits",
         "primarschulgemeinde",
+        # Kevin identified these as Sonstiges after they showed up too
+        # ambiguous to guess in the second mining pass.
+        "echst.net", "nvg zentrum",
     ],
     "Lohn/Einkommen": [
         # Any "Gutschrift Salär: <employer>" line, regardless of employer

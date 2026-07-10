@@ -332,6 +332,27 @@ def test_default_category_rules_recognize_second_mining_pass(tmp_path):
     conn.close()
 
 
+def test_default_category_rules_recognize_kevin_confirmed_merchants(tmp_path):
+    # Five merchants flagged as too ambiguous to guess in the second mining
+    # pass — Kevin identified what they actually are.
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        return conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()["name"]
+
+    assert category_name("BANKHAUSMETZLER,FRANKFURTAM") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Bankhaus Metzler 60329") == "Restaurants/Ausgang"
+    assert category_name("ECHST.NET,AMSTERDAM") == "Sonstiges"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Reinhard AG 0301 Bern") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Hauptsitz Postfinance 0301") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, NVG Zentrum Oberdorf Aff") == "Sonstiges"
+    conn.close()
+
+
 def test_init_db_adds_learning_columns_to_category_rules(tmp_path):
     conn = init_db(tmp_path / "test.db")
 
