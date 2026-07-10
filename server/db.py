@@ -98,236 +98,252 @@ DEFAULT_CATEGORIES = [
     "Lohn/Einkommen", "Sonstiges", "Kreditkarten-Ausgleich", "Unkategorisiert",
 ]
 
-# (keyword, category_name) — keyword must be lowercase (categorize() matches
-# against a lowercased description) and is matched as a substring, so a more
+# Grouped by category so maintenance means "find the category, add a
+# keyword" instead of hunting through one long flat list for where a new
+# merchant belongs. Keyword must be lowercase (categorize() matches against
+# a lowercased description) and is matched as a substring, so a more
 # specific/longer keyword should be used wherever a shorter one would
-# otherwise misfire (see "sbb mobile" vs "twint" below).
-DEFAULT_CATEGORY_RULES = [
-    # Lebensmittel
-    ("migros", "Lebensmittel"),
-    ("coop", "Lebensmittel"),
-    ("volg", "Lebensmittel"),
-    ("denner", "Lebensmittel"),
-    ("metzg", "Lebensmittel"),
-    # A single umlaut spelling is enough now — RuleBasedCategorizer.predict()
-    # normalizes stored keywords before matching (see Task 3), so "bäckerei"
-    # transparently also matches an incoming "BAECKEREI"/"Backerei" spelling.
-    ("bäckerei", "Lebensmittel"),
-    ("back.-conf.", "Lebensmittel"),
-    ("confis", "Lebensmittel"),
-    # ZKB's own statement text drops "ä" entirely rather than folding it to
-    # "ae" the way Cornercard's export does (e.g. "Bäckerei" -> "Backerei",
-    # not "Baeckerei") — normalize_description() can't recover a dropped
-    # letter, so this needs its own keyword alongside "bäckerei" above.
-    ("backerei", "Lebensmittel"),
-    ("konditorei", "Lebensmittel"),
-    ("lidl", "Lebensmittel"),
-    # The Spar chain's own receipt/statement text ("Spar dankt") rather than
-    # the bare brand name — "spar" alone would false-positive on "sparen"/
-    # "Sparen/Anlegen"-adjacent text.
-    ("spar dankt", "Lebensmittel"),
-    # Restaurants/Ausgang
-    ("pizza falcone", "Restaurants/Ausgang"),
-    ("curry factory", "Restaurants/Ausgang"),
-    ("bar / restaurant caled", "Restaurants/Ausgang"),
-    ("kuhn back & gastro", "Restaurants/Ausgang"),
-    ("autogrill", "Restaurants/Ausgang"),
-    ("* eats", "Restaurants/Ausgang"),
-    # Well-known fast-food/café chains — a curated starter list so common
-    # chains are recognized on first encounter instead of needing a manual
-    # correction each time (see docs/superpowers chat context: "Subway" and
-    # "Steiner Flughafebeck" were the motivating examples). "mcdonald" and
-    # "domino" are deliberately the bare brand stem, not the full name, so
-    # they match both "McDonald's"/"McDonalds" and "Domino's"/"Dominos"
-    # spelling variants (normalize_description doesn't strip apostrophes).
-    ("subway", "Restaurants/Ausgang"),
-    ("mcdonald", "Restaurants/Ausgang"),
-    ("burger king", "Restaurants/Ausgang"),
-    ("kfc", "Restaurants/Ausgang"),
-    ("starbucks", "Restaurants/Ausgang"),
-    ("dunkin", "Restaurants/Ausgang"),
-    ("domino", "Restaurants/Ausgang"),
-    ("manora", "Restaurants/Ausgang"),
-    ("vapiano", "Restaurants/Ausgang"),
-    ("nordsee", "Restaurants/Ausgang"),
-    # Real vendor from Kevin's own statements: a bakery/food counter at the
-    # airport — food bought there is eating-out, not grocery shopping, so
-    # it's mapped here rather than under the generic "bäckerei" keyword
-    # (Lebensmittel) below.
-    ("steiner flughafebeck", "Restaurants/Ausgang"),
-    # More real vendors mined from Kevin's full statement history — small
-    # bakery/café/take-away stops where he's eating, not grocery shopping.
-    ("backer-imbiss", "Restaurants/Ausgang"),
-    ("take-away", "Restaurants/Ausgang"),
-    ("ristorante", "Restaurants/Ausgang"),
-    ("berggasthaus", "Restaurants/Ausgang"),
-    ("wal*cafe", "Restaurants/Ausgang"),
-    ("stadtspital triemli cafe", "Restaurants/Ausgang"),
-    ("estia home of taste", "Restaurants/Ausgang"),
-    ("tillystante", "Restaurants/Ausgang"),
-    # Cornercard's own comma-joined "MERCHANT,CITY" format has no space
-    # between words — the existing "pizza falcone" keyword (with a space)
-    # never matches it, so this is a second keyword for the same vendor.
-    ("pizzafalcone", "Restaurants/Ausgang"),
-    # Marché (SV Group) — a restaurant chain at Swiss train stations/
-    # airports/highway stops, e.g. "Marche-6137 Firehouse".
-    ("marche-", "Restaurants/Ausgang"),
-    # Transport (checked before generic "twint" below due to length)
-    ("sbb", "Transport"),
-    ("sbb mobile", "Transport"),
-    ("tankstell", "Transport"),
-    ("parkingpay", "Transport"),
-    ("taxifahrt", "Transport"),
-    ("ubr* pending", "Transport"),
-    # Generic ride/refund fallback — shorter than "* eats" above, so a food
-    # delivery line still wins Restaurants/Ausgang; this only catches plain
-    # Uber rides and refunds like "Rückerstattung ... UBER 00000 AMSTERDAM".
-    ("uber", "Transport"),
-    ("bergbahnen", "Freizeit"),
-    # Gas station brands and e-scooter/ride-share apps, mined from real
-    # statements — none of these are covered by the generic "tankstell"/
-    # "uber" keywords above.
-    ("shell", "Transport"),
-    ("socar", "Transport"),
-    ("dott scooter", "Transport"),
-    ("bolt.", "Transport"),
-    ("amag leasing", "Transport"),
-    # Reisen
-    ("swiss intl air lines", "Reisen"),
-    # Real vendors print the same airline with no spaces at all
-    # ("SwissIntlAirlines,Frankfurt") — the spaced keyword above never
-    # matches that; kept as a second keyword rather than replacing it, in
-    # case a spaced format ever does show up.
-    ("swissintlairlines", "Reisen"),
-    ("easyjet", "Reisen"),
-    ("emirates", "Reisen"),
-    ("hotel", "Reisen"),
-    ("airbnb", "Reisen"),
-    ("meininger", "Reisen"),
-    ("getyourguide", "Reisen"),
-    ("airalo", "Reisen"),
-    # Versicherungen
-    ("ökk", "Versicherungen"),
-    # ZKB drops the umlaut entirely on this one too ("ÖKK" -> "OKK"), same
-    # issue as the "bäckerei"/"backerei" pair above. Kept as "okk kranken"
-    # rather than the bare 3-letter "okk" to avoid an accidental substring
-    # match inside unrelated words.
-    ("okk kranken", "Versicherungen"),
-    ("helsana", "Versicherungen"),
-    ("axa leben", "Versicherungen"),
-    ("axa versicherungen", "Versicherungen"),
-    ("innova versicherungen", "Versicherungen"),
-    ("mobiliar versicherungsgesellschaft", "Versicherungen"),
-    ("swiss life", "Versicherungen"),
-    # Rega (Swiss air rescue) — an annual patronage membership, functionally
-    # the same kind of recurring protection payment as the insurers above.
-    ("rega,", "Versicherungen"),
-    # Gesundheit
-    ("apotheke", "Gesundheit"),
-    ("zahnarztpraxis", "Gesundheit"),
-    ("gynpraxis", "Gesundheit"),
-    ("gemeinschaftspraxis", "Gesundheit"),
-    ("shiatsu", "Gesundheit"),
-    ("physio-therapien", "Gesundheit"),
-    ("orthopaedie-technik", "Gesundheit"),
-    # Hospital visits — kept shorter/broader than "stadtspital triemli cafe"
-    # (Restaurants/Ausgang) below so the on-site café still wins for actual
-    # café purchases; this only catches the hospital itself.
-    ("stadtspital triemli", "Gesundheit"),
-    # Shopping
-    ("zalando", "Shopping"),
-    ("digitec galaxus", "Shopping"),
-    ("galaxus mobile", "Shopping"),
-    ("media markt", "Shopping"),
-    ("velotec", "Shopping"),
-    ("calzedoni", "Shopping"),
-    ("cutie socks", "Shopping"),
-    ("scooter planet", "Shopping"),
-    ("ofinto", "Shopping"),
-    ("baby-walz", "Shopping"),
-    ("ikea", "Shopping"),
-    ("hornbach", "Shopping"),
-    # Cornercard's comma-joined "MERCHANT,CITY" format has no space between
-    # words at all — same issue as "pizzafalcone"/"swissintlairlines"
-    # above, for these existing space-separated keywords.
-    ("cutiesocks", "Shopping"),
-    ("scooterplanet", "Shopping"),
-    ("mediamarkt", "Shopping"),
-    # Abos
-    ("spotify", "Abos"),
-    ("netflix", "Abos"),
-    ("apple.com/bill", "Abos"),
-    ("sayintentions", "Abos"),
-    ("salt mobile", "Abos"),
-    ("navigraph", "Abos"),
-    # digitec Galaxus's own subscription product — distinct from the plain
-    # "digitec galaxus"/"galaxus mobile" one-off purchases above (Shopping).
-    ("galaxus abos", "Abos"),
-    # Freizeit
-    ("steamgames", "Freizeit"),
-    ("coiffure", "Freizeit"),
-    ("playstation network", "Freizeit"),
-    ("sanapark", "Freizeit"),
-    # Bargeldbezug
-    ("bezug zkb visa debit card", "Bargeldbezug"),
-    # Sparen/Anlegen
-    ("findependent", "Sparen/Anlegen"),
-    # ZKB's own pillar-3a app; the risk-strategy fund name appears in the
-    # statement text ("Frankly Risky").
-    ("frankly", "Sparen/Anlegen"),
-    # Miete/Wohnen
-    ("barth real ag", "Miete/Wohnen"),
-    ("elektrizitaetswerke", "Miete/Wohnen"),
-    # Kreditkarten-Ausgleich — both sides of the "pay off the credit card
-    # bill from the checking account" event: the credit-card statement's own
-    # payment-received line ("Ihre Zahlung – Besten Dank", a credit) and the
-    # checking account's matching collection debit (identified by the card
-    # issuer's legal name as it appears on the ZKB statement). Excluded from
-    # totals (see categories.excluded_from_totals) because the money already
+# otherwise misfire (see "sbb mobile" vs "twint" below) — categorize()
+# always prefers the longest matching keyword, regardless of list order.
+# Flattened into the (keyword, category) pairs actually seeded by
+# init_db() via _flatten_category_keyword_groups() below; that flattening
+# doesn't change matching/precedence behavior at all, only this source
+# layout is new.
+DEFAULT_CATEGORY_KEYWORD_GROUPS = {
+    "Lebensmittel": [
+        "migros", "coop", "volg", "denner", "metzg", "suters hofmart",
+        # A single umlaut spelling is enough now — RuleBasedCategorizer.
+        # predict() normalizes stored keywords before matching (see Task 3),
+        # so "bäckerei" transparently also matches an incoming "BAECKEREI"
+        # spelling.
+        "bäckerei", "back.-conf.", "confis",
+        # ZKB's own statement text drops "ä" entirely rather than folding it
+        # to "ae" the way Cornercard's export does (e.g. "Bäckerei" ->
+        # "Backerei", not "Baeckerei") — normalize_description() can't
+        # recover a dropped letter, so this needs its own keyword alongside
+        # "bäckerei" above. Same issue recurs a few times below (ÖKK,
+        # Bevölkerungsamt) — noted once here, not repeated at length.
+        "backerei", "konditorei", "lidl",
+        # The Spar chain's own receipt/statement text ("Spar dankt") rather
+        # than the bare brand name — "spar" alone would false-positive on
+        # "sparen"/"Sparen/Anlegen"-adjacent text.
+        "spar dankt",
+    ],
+    "Restaurants/Ausgang": [
+        # Generic dining-out words — catch any vendor that doesn't match a
+        # specific chain keyword below, so a new restaurant/café doesn't
+        # need its own rule the way a genuinely distinct merchant does.
+        "restaurant", "cafe",
+        "pizza falcone", "curry factory", "bar / restaurant caled",
+        "kuhn back & gastro", "autogrill", "* eats", "uber eats",
+        # Well-known fast-food/café chains — a curated starter list so
+        # common chains are recognized on first encounter instead of
+        # needing a manual correction each time. "mcdonald" and "domino"
+        # are deliberately the bare brand stem, not the full name, so they
+        # match both "McDonald's"/"McDonalds" and "Domino's"/"Dominos"
+        # spelling variants (normalize_description doesn't strip
+        # apostrophes).
+        "subway", "mcdonald", "burger king", "kfc", "starbucks", "dunkin",
+        "domino", "manora", "vapiano", "nordsee", "legend doener",
+        # Real vendor from Kevin's own statements: a bakery/food counter at
+        # the airport — food bought there is eating-out, not grocery
+        # shopping, so it's mapped here rather than under the generic
+        # bakery keywords above.
+        "steiner flughafebeck",
+        # More real vendors mined from Kevin's full statement history —
+        # small bakery/café/take-away stops where he's eating, not grocery
+        # shopping. "wal*cafe" is deliberately NOT listed separately: it
+        # already contains "cafe" as a substring, so the generic keyword
+        # above catches it without a dedicated rule.
+        "backer-imbiss", "take-away", "ristorante", "berggasthaus",
+        # Kept longer/more specific than the generic "cafe" above so the
+        # hospital's on-site café still wins Restaurants/Ausgang over the
+        # shorter "stadtspital triemli" (Gesundheit) keyword below —
+        # categorize() prefers the longest match.
+        "stadtspital triemli cafe",
+        "estia home of taste", "tillystante",
+        # Cornercard's own comma-joined "MERCHANT,CITY" format has no space
+        # between words — the existing "pizza falcone" keyword (with a
+        # space) never matches it, so this is a second keyword for the
+        # same vendor.
+        "pizzafalcone",
+        # Marché (SV Group) — a restaurant chain at Swiss train stations/
+        # airports/highway stops, e.g. "Marche-6137 Firehouse".
+        "marche-",
+    ],
+    "Transport": [
+        "sbb", "sbb mobile", "tankstell", "parkingpay", "taxifahrt",
+        "ubr* pending",
+        # Generic ride/refund fallback — shorter than "* eats"/"uber eats"
+        # above, so a food delivery line still wins Restaurants/Ausgang;
+        # this only catches plain Uber rides and refunds like
+        # "Rückerstattung ... UBER 00000 AMSTERDAM".
+        "uber",
+        # Gas station brands, parking, and e-scooter/ride-share apps, mined
+        # from real statements — none of these are covered by the generic
+        # "tankstell"/"uber" keywords above.
+        "shell", "socar", "avia", "agrola", "dott scooter", "bolt.",
+        "amag leasing", "parkhaus", "carwash",
+    ],
+    "Reisen": [
+        "swiss intl air lines",
+        # Real vendors print the same airline with no spaces at all
+        # ("SwissIntlAirlines,Frankfurt") — the spaced keyword above never
+        # matches that; kept as a second keyword rather than replacing it,
+        # in case a spaced format ever does show up.
+        "swissintlairlines",
+        "easyjet", "emirates", "hotel", "airbnb", "meininger",
+        "getyourguide", "airalo",
+    ],
+    "Versicherungen": [
+        "ökk",
+        # ZKB drops the umlaut entirely on this one too ("ÖKK" -> "OKK").
+        # Kept as "okk kranken" rather than the bare 3-letter "okk" to
+        # avoid an accidental substring match inside unrelated words.
+        "okk kranken",
+        "helsana", "axa leben", "axa versicherungen",
+        "innova versicherungen", "mobiliar versicherungsgesellschaft",
+        # The insurer's own marketing name ("Die Mobiliar") — broader than
+        # the full legal name above, but kept as this exact phrase rather
+        # than the bare word "mobiliar" (which is also plain German for
+        # "furniture" and could false-positive elsewhere).
+        "die mobiliar",
+        "swiss life", "protekta",
+        # Rega (Swiss air rescue) — an annual patronage membership,
+        # functionally the same kind of recurring protection payment as
+        # the insurers above.
+        "rega,",
+    ],
+    "Gesundheit": [
+        "apotheke",
+        # "zahnarzt" (dentist, in general) is broader than the specific
+        # "zahnarztpraxis" vendor name below — kept both since a shorter
+        # keyword only matters if the longer one doesn't also match.
+        "zahnarzt", "zahnarztpraxis", "gynpraxis", "gemeinschaftspraxis",
+        "shiatsu", "physio-therapien", "orthopaedie-technik",
+        # Traditional Chinese Medicine practices — no single vendor name to
+        # anchor on, so matched by the generic practice type instead. Kept
+        # as "tcm praxis" rather than the bare 3-letter "tcm": TWINT-routed
+        # payments are common in Kevin's data, and a 3-letter keyword loses
+        # to the 5-letter generic "twint" catch-all below (categorize()
+        # prefers the longest match).
+        "tcm praxis",
+        # Hospital visits — kept shorter/broader than "stadtspital triemli
+        # cafe" (Restaurants/Ausgang) above so the on-site café still wins
+        # for actual café purchases; this only catches the hospital itself.
+        "stadtspital triemli",
+    ],
+    "Shopping": [
+        "zalando", "digitec galaxus", "galaxus mobile", "media markt",
+        "velotec", "calzedoni", "cutie socks", "scooter planet", "ofinto",
+        "baby-walz", "ikea", "hornbach", "jysk", "brack", "about you",
+        "amzn",
+        # Cornercard's comma-joined "MERCHANT,CITY" format has no space
+        # between words at all — same issue as "pizzafalcone"/
+        # "swissintlairlines" above, for these existing space-separated
+        # keywords.
+        "cutiesocks", "scooterplanet", "mediamarkt",
+        # H&M purchased via the Klarna checkout — ZKB strips the "&" and
+        # prints inconsistent spacing after the asterisk across statements,
+        # so both observed spellings are kept.
+        "klarna*h m", "klarna* h m",
+    ],
+    "Abos": [
+        "spotify", "netflix", "apple.com/bill", "sayintentions",
+        "salt mobile", "navigraph",
+        # digitec Galaxus's own subscription product — distinct from the
+        # plain "digitec galaxus"/"galaxus mobile" one-off purchases above
+        # (Shopping).
+        "galaxus abos",
+    ],
+    "Freizeit": [
+        "steamgames", "coiffure", "playstation network", "sanapark",
+        "bergbahnen",
+    ],
+    "Bargeldbezug": [
+        "bezug zkb visa debit card",
+    ],
+    "Sparen/Anlegen": [
+        "findependent",
+        # ZKB's own pillar-3a app; the risk-strategy fund name appears in
+        # the statement text ("Frankly Risky").
+        "frankly",
+    ],
+    "Miete/Wohnen": [
+        "barth real ag", "otto markwalder", "elektrizitaetswerke",
+    ],
+    # Both sides of the "pay off the credit card bill from the checking
+    # account" event: the credit-card statement's own payment-received
+    # line ("Ihre Zahlung – Besten Dank", a credit) and the checking
+    # account's matching collection debit (identified by the card issuer's
+    # legal name as it appears on the ZKB statement). Excluded from totals
+    # (see categories.excluded_from_totals) because the money already
     # counted once, either way, when the individual card transactions
     # themselves were imported — counting this too would double it.
-    ("ihre zahlung", "Kreditkarten-Ausgleich"),
-    # Some PDF exports merge "IHRE"/"ZAHLUNG" into one word with no space
-    # (a pdfplumber word-extraction quirk on that specific statement layout)
-    # — kept as a separate keyword rather than loosening to bare "zahlung",
-    # which would false-positive on "Zahlungszweck"/"Ratenzahlung"/etc.
-    ("ihrezahlung", "Kreditkarten-Ausgleich"),
-    ("swisscard aecs", "Kreditkarten-Ausgleich"),
-    ("corner banca", "Kreditkarten-Ausgleich"),
-    # "Saldovortrag" (balance carried forward) is the credit-card statement's
-    # own opening-balance line — the mirror image of "Ihre Zahlung" above.
-    # Both represent last month's already-counted balance, not a new
-    # expense/income this month, so both are excluded from totals.
-    ("saldovortrag", "Kreditkarten-Ausgleich"),
-    # Sonstiges — unclear small vendors, kept out of real spending categories
-    ("ubs - zahlungen div", "Sonstiges"),
-    ("corporate benefits", "Sonstiges"),
-    ("marko switzerland", "Sonstiges"),
-    # Cantonal tax withdrawal and generic bank transaction fees — no
-    # dedicated category for either, and both are clearly not everyday
-    # spending.
-    ("steuerbezug", "Sonstiges"),
-    ("zahlungsverkehrspreise", "Sonstiges"),
-    # Lohn/Einkommen — salary credits, identified by employer name as they
-    # appear on the statement's "Gutschrift Salär: ..." line.
-    ("gutschrift salaer: kanton", "Lohn/Einkommen"),
-    ("business systems integration", "Lohn/Einkommen"),
-    # Privatüberweisungen — recurring transfers to/from family, identified
-    # by name as they appear on the statement. Kept ahead of the generic
-    # "twint" catch-all below only by virtue of being longer/more specific,
-    # not by list position (categorize() always prefers the longest match).
-    ("jayaweera kevin oder fabienne", "Privatüberweisungen"),
-    ("fabienne brun", "Privatüberweisungen"),
-    ("jasmin xenia liviero", "Privatüberweisungen"),
-    ("kevin jayaweera", "Privatüberweisungen"),
-    # Generic TWINT catch-all. Kept last / shortest on purpose: every
-    # merchant-routed "TWINT: X" line above has a longer, more specific
-    # keyword that must win first (categorize() prefers the longest
-    # matching keyword), so this only catches person-to-person transfers
-    # like "TWINT: SCHWARTZ, PATRICK +4176..." that have no merchant-
-    # specific rule.
-    ("twint", "Privatüberweisungen"),
-]
+    "Kreditkarten-Ausgleich": [
+        "ihre zahlung",
+        # Some PDF exports merge "IHRE"/"ZAHLUNG" into one word with no
+        # space (a pdfplumber word-extraction quirk on that specific
+        # statement layout) — kept as a separate keyword rather than
+        # loosening to bare "zahlung", which would false-positive on
+        # "Zahlungszweck"/"Ratenzahlung"/etc.
+        "ihrezahlung", "swisscard aecs", "corner banca",
+        # "Saldovortrag" (balance carried forward) is the credit-card
+        # statement's own opening-balance line — the mirror image of "Ihre
+        # Zahlung" above. Both represent last month's already-counted
+        # balance, not a new expense/income this month, so both are
+        # excluded from totals.
+        "saldovortrag",
+    ],
+    "Sonstiges": [
+        # Unclear small vendors, kept out of real spending categories.
+        "ubs - zahlungen div", "corporate benefits", "marko switzerland",
+        # Cantonal tax withdrawal and generic bank transaction fees — no
+        # dedicated category for either, and both are clearly not everyday
+        # spending.
+        "steuerbezug", "zahlungsverkehrspreise",
+        # Government/administrative offices — not personal spending, but
+        # not a transfer either.
+        "post ch", "bevölkerungsamt",
+        # ZKB drops the umlaut entirely here too ("Bevölkerungsamt" ->
+        # "Bevolkerungsamt"), same issue as "bäckerei"/"backerei" above.
+        "bevolkerungsamt", "einwohnermeldeamt", "gemeindeverwaltung",
+    ],
+    "Lohn/Einkommen": [
+        # Any "Gutschrift Salär: <employer>" line, regardless of employer
+        # — one general keyword instead of one entry per employer name.
+        "salaer",
+    ],
+    "Privatüberweisungen": [
+        # Recurring transfers to/from family, identified by name as they
+        # appear on the statement.
+        "jayaweera kevin oder fabienne", "fabienne brun",
+        "jasmin xenia liviero", "kevin jayaweera",
+        # ZKB's own transaction-type label for any account-to-account
+        # transfer — broader than the name-specific keywords above, so a
+        # transfer to/from someone not yet named here is still recognized
+        # instead of needing a new rule added.
+        "kontouebertrag",
+        # Generic TWINT catch-all. Kept last / shortest on purpose: every
+        # merchant-routed "TWINT: X" line above has a longer, more specific
+        # keyword that must win first (categorize() prefers the longest
+        # matching keyword), so this only catches person-to-person
+        # transfers like "TWINT: SCHWARTZ, PATRICK +4176..." that have no
+        # merchant-specific rule.
+        "twint",
+    ],
+}
+
+
+def _flatten_category_keyword_groups(groups):
+    return [
+        (keyword, category)
+        for category, keywords in groups.items()
+        for keyword in keywords
+    ]
+
+
+DEFAULT_CATEGORY_RULES = _flatten_category_keyword_groups(DEFAULT_CATEGORY_KEYWORD_GROUPS)
 
 
 def get_connection(db_path):

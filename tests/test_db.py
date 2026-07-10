@@ -182,6 +182,83 @@ def test_default_category_rules_recognize_patterns_mined_from_real_statements(tm
     conn.close()
 
 
+def test_default_category_keyword_groups_flatten_into_default_category_rules():
+    # DEFAULT_CATEGORY_RULES is derived from the grouped-by-category source
+    # (DEFAULT_CATEGORY_KEYWORD_GROUPS) rather than hand-maintained as a
+    # flat list — this guards that the derivation is lossless (every
+    # keyword shows up, correctly paired with its group's category) and
+    # that no keyword was accidentally duplicated across two groups (the
+    # category_rules.keyword UNIQUE constraint would silently drop the
+    # second one via INSERT OR IGNORE, which is much easier to catch here
+    # than by noticing a miscategorized import later).
+    from server.db import DEFAULT_CATEGORY_KEYWORD_GROUPS
+
+    expected = [
+        (keyword, category)
+        for category, keywords in DEFAULT_CATEGORY_KEYWORD_GROUPS.items()
+        for keyword in keywords
+    ]
+    assert DEFAULT_CATEGORY_RULES == expected
+
+    all_keywords = [keyword for keyword, _ in DEFAULT_CATEGORY_RULES]
+    assert len(all_keywords) == len(set(all_keywords))
+
+
+def test_default_category_rules_group_similar_merchants_under_one_category(tmp_path):
+    # Consolidation pass: broaden rules so related merchants share a
+    # category without needing one keyword per exact vendor name, per
+    # Kevin's explicit request to reduce the number of narrow rules.
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        return conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()["name"]
+
+    # Lebensmittel
+    assert category_name("Belastung TWINT: SUTERS HOFMART AESCH ZH") == "Lebensmittel"
+    # Restaurants/Ausgang — generic "restaurant"/"cafe" now catch vendors
+    # that don't match any specific chain keyword.
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Restaurant Felsenegg 0000") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Wal*Cafe Betschart 0000") == "Restaurants/Ausgang"
+    assert category_name("Belastung TWINT: UBER EATS ZUERICH") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Legend Doener Zuerich") == "Restaurants/Ausgang"
+    # Transport
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Avia Tankstelle Affoltern") == "Transport"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Agrola Bern") == "Transport"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, EKZ Sihlcity Parkhaus Ta") == "Transport"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Carwash Affoltern") == "Transport"
+    # Miete/Wohnen
+    assert category_name("Belastung Dauerauftrag: Otto Markwalder, Muster 3, 8000 Zuerich") == "Miete/Wohnen"
+    # Versicherungen
+    assert category_name("Gutschrift Auftraggeber: Protekta Rechtsschutz-Versicherung AG, 3011 Bern, CH") == "Versicherungen"
+    assert category_name("Die Mobiliar Rechnung 2026") == "Versicherungen"
+    # Gesundheit
+    assert category_name("Belastung TWINT: ZAHNARZT MUSTER AESCH") == "Gesundheit"
+    assert category_name("Belastung TWINT: TCM PRAXIS ZUERICH") == "Gesundheit"
+    # Shopping
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 5770, AMZN Mktp") == "Shopping"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Jysk Duebendorf") == "Shopping"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Brack.ch Willisau") == "Shopping"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 5770, Klarna*ABOUT YOU") == "Shopping"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 5770, Klarna*H M 0000") == "Shopping"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 5770, Klarna* H M 00000") == "Shopping"
+    # Sonstiges
+    assert category_name("Belastung TWINT: POST CH AG BERN / (QR)") == "Sonstiges"
+    assert category_name("Belastung TWINT: BEVOLKERUNGSAMT STADT ZURICH ZURICH") == "Sonstiges"
+    assert category_name("Belastung TWINT: EINWOHNERMELDEAMT MUSTERSTADT") == "Sonstiges"
+    assert category_name("Belastung TWINT: GEMEINDEVERWALTUNG MUSTERSTADT") == "Sonstiges"
+    # Lohn/Einkommen — a single general "Salär" keyword now covers any
+    # employer, not one keyword per employer name.
+    assert category_name("Gutschrift Salär: Irgendein Neuer Arbeitgeber AG, Musterstrasse 1, CH") == "Lohn/Einkommen"
+    # Privatüberweisungen — a general "Kontoübertrag" keyword now covers
+    # any account-to-account transfer, not one keyword per counterpart name.
+    assert category_name("Gutschrift Kontoübertrag: Irgendjemand Neues, Musterstrasse 1, 8000 Zuerich") == "Privatüberweisungen"
+    conn.close()
+
+
 def test_init_db_adds_learning_columns_to_category_rules(tmp_path):
     conn = init_db(tmp_path / "test.db")
 
