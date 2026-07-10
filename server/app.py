@@ -60,8 +60,11 @@ def _fetch_filtered_transactions(conn, args):
     query = (
         "SELECT t.id, t.date, t.description, t.amount_cents, t.currency, "
         "t.category_id, c.name as category_name, t.source, "
+        "t.account_id, a.name as account_name, "
         "COALESCE(c.excluded_from_totals, 0) as excluded_from_totals "
-        "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id WHERE 1=1"
+        "FROM transactions t "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "LEFT JOIN accounts a ON t.account_id = a.id WHERE 1=1"
     )
     params = []
     if args.get("start"):
@@ -76,6 +79,12 @@ def _fetch_filtered_transactions(conn, args):
     if args.get("source"):
         query += " AND t.source = ?"
         params.append(args["source"])
+    if args.get("account_id"):
+        query += " AND t.account_id = ?"
+        params.append(args["account_id"])
+    if args.get("tag_id"):
+        query += " AND EXISTS (SELECT 1 FROM transaction_tags tt WHERE tt.transaction_id = t.id AND tt.tag_id = ?)"
+        params.append(args["tag_id"])
     if args.get("type") == "income":
         query += " AND t.amount_cents > 0"
     elif args.get("type") == "expense":
@@ -99,6 +108,30 @@ def _fetch_filtered_transactions(conn, args):
         params.append(round(max_amount * 100))
     query += " ORDER BY t.date DESC"
     return conn.execute(query, params).fetchall()
+
+
+def _attach_tags(conn, rows):
+    """rows: list of dicts with an "id" key (transaction ids). Adds a
+    "tags" key (list of {id, name}, empty if none) to each, via one bulk
+    query rather than one-per-row."""
+    if not rows:
+        return rows
+    ids = [row["id"] for row in rows]
+    placeholders = ",".join("?" for _ in ids)
+    tag_rows = conn.execute(
+        f"SELECT tt.transaction_id, t.id, t.name FROM transaction_tags tt "
+        f"JOIN tags t ON tt.tag_id = t.id WHERE tt.transaction_id IN ({placeholders}) "
+        f"ORDER BY t.name",
+        ids,
+    ).fetchall()
+    tags_by_transaction = {}
+    for tag_row in tag_rows:
+        tags_by_transaction.setdefault(tag_row["transaction_id"], []).append(
+            {"id": tag_row["id"], "name": tag_row["name"]}
+        )
+    for row in rows:
+        row["tags"] = tags_by_transaction.get(row["id"], [])
+    return rows
 
 
 def create_app(db_path=None, statements_dir=None):
@@ -518,12 +551,155 @@ def register_routes(app):
         finally:
             conn.close()
 
+    @app.route("/api/tags", methods=["GET"])
+    def list_tags():
+        conn = get_db()
+        rows = conn.execute("SELECT id, name FROM tags ORDER BY name").fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+
+    @app.route("/api/tags", methods=["POST"])
+    def create_tag():
+        data = request.get_json(silent=True)
+        if data is None or not str(data.get("name", "")).strip():
+            return jsonify({"error": "request body must include a non-empty name"}), 400
+        name = str(data["name"]).strip()
+        conn = get_db()
+        try:
+            existing = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
+            if existing is not None:
+                return jsonify({"error": "a tag with this name already exists"}), 400
+            cursor = conn.execute("INSERT INTO tags (name) VALUES (?)", (name,))
+            conn.commit()
+            return jsonify({"id": cursor.lastrowid, "name": name}), 201
+        finally:
+            conn.close()
+
+    @app.route("/api/tags/<int:tag_id>", methods=["PUT"])
+    def rename_tag(tag_id):
+        data = request.get_json(silent=True)
+        if data is None or not str(data.get("name", "")).strip():
+            return jsonify({"error": "request body must include a non-empty name"}), 400
+        name = str(data["name"]).strip()
+        conn = get_db()
+        try:
+            tag = conn.execute("SELECT id FROM tags WHERE id = ?", (tag_id,)).fetchone()
+            if tag is None:
+                return jsonify({"error": "tag not found"}), 404
+            duplicate = conn.execute(
+                "SELECT id FROM tags WHERE name = ? AND id != ?", (name, tag_id)
+            ).fetchone()
+            if duplicate is not None:
+                return jsonify({"error": "a tag with this name already exists"}), 400
+            conn.execute("UPDATE tags SET name = ? WHERE id = ?", (name, tag_id))
+            conn.commit()
+            return jsonify({"ok": True})
+        finally:
+            conn.close()
+
+    @app.route("/api/tags/<int:tag_id>", methods=["DELETE"])
+    def delete_tag(tag_id):
+        conn = get_db()
+        try:
+            tag = conn.execute("SELECT id FROM tags WHERE id = ?", (tag_id,)).fetchone()
+            if tag is None:
+                return jsonify({"error": "tag not found"}), 404
+            # transaction_tags has ON DELETE CASCADE, so assignments go too.
+            conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+            conn.commit()
+            return jsonify({"ok": True})
+        finally:
+            conn.close()
+
+    @app.route("/api/transactions/<int:transaction_id>/tags", methods=["POST"])
+    def assign_tag(transaction_id):
+        data = request.get_json(silent=True)
+        if data is None or not data.get("tag_id"):
+            return jsonify({"error": "request body must include tag_id"}), 400
+        conn = get_db()
+        try:
+            txn = conn.execute("SELECT id FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
+            if txn is None:
+                return jsonify({"error": "transaction not found"}), 404
+            tag = conn.execute("SELECT id FROM tags WHERE id = ?", (data["tag_id"],)).fetchone()
+            if tag is None:
+                return jsonify({"error": "tag not found"}), 404
+            conn.execute(
+                "INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)",
+                (transaction_id, data["tag_id"]),
+            )
+            conn.commit()
+            return jsonify({"ok": True})
+        finally:
+            conn.close()
+
+    @app.route("/api/transactions/<int:transaction_id>/tags/<int:tag_id>", methods=["DELETE"])
+    def unassign_tag(transaction_id, tag_id):
+        conn = get_db()
+        try:
+            conn.execute(
+                "DELETE FROM transaction_tags WHERE transaction_id = ? AND tag_id = ?",
+                (transaction_id, tag_id),
+            )
+            conn.commit()
+            return jsonify({"ok": True})
+        finally:
+            conn.close()
+
+    @app.route("/api/accounts", methods=["GET"])
+    def list_accounts():
+        conn = get_db()
+        rows = conn.execute("SELECT id, source_key, name FROM accounts ORDER BY name").fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+
+    @app.route("/api/accounts/<int:account_id>", methods=["PUT"])
+    def rename_account(account_id):
+        data = request.get_json(silent=True)
+        if data is None or not str(data.get("name", "")).strip():
+            return jsonify({"error": "request body must include a non-empty name"}), 400
+        name = str(data["name"]).strip()
+        conn = get_db()
+        try:
+            account = conn.execute("SELECT id FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if account is None:
+                return jsonify({"error": "account not found"}), 404
+            conn.execute("UPDATE accounts SET name = ? WHERE id = ?", (name, account_id))
+            conn.commit()
+            return jsonify({"ok": True})
+        finally:
+            conn.close()
+
+    @app.route("/api/accounts/<int:account_id>", methods=["DELETE"])
+    def delete_account(account_id):
+        conn = get_db()
+        try:
+            account = conn.execute("SELECT id FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if account is None:
+                return jsonify({"error": "account not found"}), 404
+            dependency_counts = {
+                "transaction_count": conn.execute(
+                    "SELECT COUNT(*) c FROM transactions WHERE account_id = ?", (account_id,)
+                ).fetchone()["c"],
+                "pending_count": conn.execute(
+                    "SELECT COUNT(*) c FROM pending_transactions WHERE account_id = ?", (account_id,)
+                ).fetchone()["c"],
+            }
+            if any(dependency_counts.values()):
+                return jsonify(dependency_counts), 409
+            conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+            conn.commit()
+            return jsonify({"ok": True})
+        finally:
+            conn.close()
+
     @app.route("/api/transactions", methods=["GET"])
     def list_transactions():
         conn = get_db()
         rows = _fetch_filtered_transactions(conn, request.args)
+        result = _attach_tags(conn, [dict(r) for r in rows])
         conn.close()
-        return jsonify([dict(r) for r in rows])
+        return jsonify(result)
 
     @app.route("/api/transactions", methods=["DELETE"])
     def delete_transactions():
