@@ -208,6 +208,11 @@ DEFAULT_CATEGORY_RULES = [
     ("airalo", "Reisen"),
     # Versicherungen
     ("ökk", "Versicherungen"),
+    # ZKB drops the umlaut entirely on this one too ("ÖKK" -> "OKK"), same
+    # issue as the "bäckerei"/"backerei" pair above. Kept as "okk kranken"
+    # rather than the bare 3-letter "okk" to avoid an accidental substring
+    # match inside unrelated words.
+    ("okk kranken", "Versicherungen"),
     ("helsana", "Versicherungen"),
     ("axa leben", "Versicherungen"),
     ("axa versicherungen", "Versicherungen"),
@@ -240,12 +245,15 @@ DEFAULT_CATEGORY_RULES = [
     ("scooter planet", "Shopping"),
     ("ofinto", "Shopping"),
     ("baby-walz", "Shopping"),
+    ("ikea", "Shopping"),
+    ("hornbach", "Shopping"),
     # Abos
     ("spotify", "Abos"),
     ("netflix", "Abos"),
     ("apple.com/bill", "Abos"),
     ("sayintentions", "Abos"),
     ("salt mobile", "Abos"),
+    ("navigraph", "Abos"),
     # digitec Galaxus's own subscription product — distinct from the plain
     # "digitec galaxus"/"galaxus mobile" one-off purchases above (Shopping).
     ("galaxus abos", "Abos"),
@@ -305,6 +313,7 @@ DEFAULT_CATEGORY_RULES = [
     ("jayaweera kevin oder fabienne", "Privatüberweisungen"),
     ("fabienne brun", "Privatüberweisungen"),
     ("jasmin xenia liviero", "Privatüberweisungen"),
+    ("kevin jayaweera", "Privatüberweisungen"),
     # Generic TWINT catch-all. Kept last / shortest on purpose: every
     # merchant-routed "TWINT: X" line above has a longer, more specific
     # keyword that must win first (categorize() prefers the longest

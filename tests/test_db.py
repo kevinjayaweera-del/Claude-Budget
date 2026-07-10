@@ -162,6 +162,16 @@ def test_default_category_rules_recognize_patterns_mined_from_real_statements(tm
     assert category_name(
         "Gutschrift Salär: BSI BUSINESS SYSTEMS INTEGRATION AG, TAEFERNWEG 1 CH Auftrags-Nr.X"
     ) == "Lohn/Einkommen"
+    # Shopping
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, IKEA AG, Spreitenbach (A Auftrags-Nr.X") == "Shopping"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Hornbach Baumarkt Affolt Auftrags-Nr.X") == "Shopping"
+    # Versicherungen — ZKB drops the umlaut here too ("ÖKK" -> "OKK"), same
+    # issue as the "bäckerei"/"backerei" pair above.
+    assert category_name("Gutschrift Auftraggeber: OKK Kranken- und Unfallvers., Bahnhofstrasse Auftrags-Nr.X") == "Versicherungen"
+    # Abos
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, NAVIGRAPH 00000 Auftrags-Nr.X") == "Abos"
+    # Privatüberweisungen
+    assert category_name("Gutschrift Auftraggeber: Kevin Jayaweera, Chilegässli 12d, 8904 Aesch Auftrags-Nr.X") == "Privatüberweisungen"
     conn.close()
 
 
