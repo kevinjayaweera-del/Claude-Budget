@@ -56,6 +56,22 @@ def get_db():
     return get_connection(current_app.config["DB_PATH"])
 
 
+# Each formatter takes a pandas Series of ISO date strings ("YYYY-MM-DD")
+# and returns period-label strings suitable for grouping/sorting
+# lexicographically in chronological order.
+_PERIOD_KEY_FORMATTERS = {
+    "day": lambda dates: dates,
+    "week": lambda dates: pd.to_datetime(dates).dt.strftime("%G-W%V"),
+    "month": lambda dates: dates.str.slice(0, 7),
+    "quarter": lambda dates: pd.to_datetime(dates).dt.to_period("Q").astype(str).str.replace("Q", "-Q"),
+    "year": lambda dates: dates.str.slice(0, 4),
+}
+
+
+def _period_key(dates, granularity):
+    return _PERIOD_KEY_FORMATTERS[granularity](dates)
+
+
 def _fetch_filtered_transactions(conn, args):
     query = (
         "SELECT t.id, t.date, t.description, t.amount_cents, t.currency, "
@@ -742,16 +758,28 @@ def register_routes(app):
 
     @app.route("/api/summary", methods=["GET"])
     def summary():
+        # granularity controls the NEW by_period breakdown's bucket size for
+        # the dashboard's flexible time axis; by_month is unchanged (always
+        # month-bucketed) so the existing Übersicht trend chart keeps working
+        # without a matching change on its end.
+        granularity = request.args.get("granularity", "month")
+        if granularity not in _PERIOD_KEY_FORMATTERS:
+            abort(400, description=f"granularity must be one of {sorted(_PERIOD_KEY_FORMATTERS)}")
+
         conn = get_db()
         rows = _fetch_filtered_transactions(conn, request.args)
         categories = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM categories")}
         conn.close()
 
         if not rows:
-            return jsonify({"total_income": 0, "total_expense": 0, "by_category": [], "by_month": []})
+            return jsonify({
+                "total_income": 0, "total_expense": 0, "by_category": [],
+                "by_month": [], "by_period": [],
+            })
 
         df = pd.DataFrame([dict(r) for r in rows])
         df["month"] = df["date"].str.slice(0, 7)
+        df["period"] = _period_key(df["date"], granularity)
         # Categories like "Kreditkarten-Ausgleich" (paying off a credit card
         # bill from the linked checking account) aren't real income/spending
         # — the money was already counted once, on whichever side the
@@ -779,11 +807,29 @@ def register_routes(app):
             for row in by_month.itertuples()
         ]
 
+        by_period_list = []
+        if not counted.empty:
+            counted = counted.copy()
+            counted["income_cents"] = counted["amount_cents"].where(counted["amount_cents"] > 0, 0)
+            counted["expense_cents"] = counted["amount_cents"].where(counted["amount_cents"] < 0, 0)
+            grouped = counted.groupby("period")[["income_cents", "expense_cents", "amount_cents"]].sum().reset_index()
+            grouped = grouped.sort_values("period")
+            by_period_list = [
+                {
+                    "period": row.period,
+                    "income_cents": int(row.income_cents),
+                    "expense_cents": int(row.expense_cents),
+                    "net_cents": int(row.amount_cents),
+                }
+                for row in grouped.itertuples()
+            ]
+
         return jsonify({
             "total_income": total_income,
             "total_expense": total_expense,
             "by_category": by_category_list,
             "by_month": by_month_list,
+            "by_period": by_period_list,
         })
 
     @app.route("/api/export", methods=["GET"])

@@ -90,6 +90,54 @@ def test_summary_totals_and_by_month(client_with_data):
     assert months == {"2026-03", "2026-04"}
 
 
+def test_summary_by_period_defaults_to_month_granularity(client_with_data):
+    summary = client_with_data.get("/api/summary").get_json()
+
+    periods = {p["period"] for p in summary["by_period"]}
+    assert periods == {"2026-03", "2026-04"}
+    april = next(p for p in summary["by_period"] if p["period"] == "2026-04")
+    assert april["income_cents"] == 520000
+    assert april["expense_cents"] == -3000
+    assert april["net_cents"] == 517000
+
+
+def test_summary_by_period_day_granularity(client_with_data):
+    summary = client_with_data.get("/api/summary?granularity=day").get_json()
+
+    periods = {p["period"] for p in summary["by_period"]}
+    assert periods == {"2026-03-01", "2026-04-05", "2026-04-10"}
+
+
+def test_summary_by_period_year_granularity(client_with_data):
+    summary = client_with_data.get("/api/summary?granularity=year").get_json()
+
+    periods = {p["period"] for p in summary["by_period"]}
+    assert periods == {"2026"}
+    year = summary["by_period"][0]
+    assert year["income_cents"] == 520000
+    assert year["expense_cents"] == -7590
+
+
+def test_summary_by_period_quarter_granularity(client_with_data):
+    summary = client_with_data.get("/api/summary?granularity=quarter").get_json()
+
+    periods = {p["period"] for p in summary["by_period"]}
+    assert periods == {"2026-Q1", "2026-Q2"}
+
+
+def test_summary_by_period_week_granularity(client_with_data):
+    summary = client_with_data.get("/api/summary?granularity=week").get_json()
+
+    assert len(summary["by_period"]) == 3
+    assert all("-W" in p["period"] for p in summary["by_period"])
+
+
+def test_summary_invalid_granularity_returns_400(client_with_data):
+    response = client_with_data.get("/api/summary?granularity=fortnight")
+
+    assert response.status_code == 400
+
+
 def test_summary_by_category_groups_expenses(client_with_data):
     summary = client_with_data.get("/api/summary").get_json()
 
@@ -124,7 +172,9 @@ def test_summary_respects_category_filter(client_with_data):
 
     summary = client_with_data.get(f"/api/summary?category_id={lebensmittel_id}").get_json()
 
-    assert summary == {"total_income": 0, "total_expense": 0, "by_category": [], "by_month": []}
+    assert summary == {
+        "total_income": 0, "total_expense": 0, "by_category": [], "by_month": [], "by_period": [],
+    }
 
 
 @pytest.fixture
