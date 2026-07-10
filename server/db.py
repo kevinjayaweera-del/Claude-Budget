@@ -247,6 +247,12 @@ DEFAULT_CATEGORY_RULES = [
     ("baby-walz", "Shopping"),
     ("ikea", "Shopping"),
     ("hornbach", "Shopping"),
+    # Cornercard's comma-joined "MERCHANT,CITY" format has no space between
+    # words at all — same issue as "pizzafalcone"/"swissintlairlines"
+    # above, for these existing space-separated keywords.
+    ("cutiesocks", "Shopping"),
+    ("scooterplanet", "Shopping"),
+    ("mediamarkt", "Shopping"),
     # Abos
     ("spotify", "Abos"),
     ("netflix", "Abos"),

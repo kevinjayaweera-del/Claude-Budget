@@ -165,6 +165,13 @@ def test_default_category_rules_recognize_patterns_mined_from_real_statements(tm
     # Shopping
     assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, IKEA AG, Spreitenbach (A Auftrags-Nr.X") == "Shopping"
     assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Hornbach Baumarkt Affolt Auftrags-Nr.X") == "Shopping"
+    # Cornercard's comma-joined format has no space between words at all —
+    # same issue as "pizzafalcone"/"swissintlairlines" above, for the
+    # existing space-separated "scooter planet"/"cutie socks"/"media markt"
+    # keywords.
+    assert category_name("SCOOTERPLANET,ZURICH") == "Shopping"
+    assert category_name("CUTIESOCKS,ZURICH") == "Shopping"
+    assert category_name("MEDIAMARKTSCHWEIZAG,DIETIKON") == "Shopping"
     # Versicherungen — ZKB drops the umlaut here too ("ÖKK" -> "OKK"), same
     # issue as the "bäckerei"/"backerei" pair above.
     assert category_name("Gutschrift Auftraggeber: OKK Kranken- und Unfallvers., Bahnhofstrasse Auftrags-Nr.X") == "Versicherungen"
