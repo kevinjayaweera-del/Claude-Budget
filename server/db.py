@@ -115,6 +115,17 @@ DEFAULT_CATEGORY_RULES = [
     ("bäckerei", "Lebensmittel"),
     ("back.-conf.", "Lebensmittel"),
     ("confis", "Lebensmittel"),
+    # ZKB's own statement text drops "ä" entirely rather than folding it to
+    # "ae" the way Cornercard's export does (e.g. "Bäckerei" -> "Backerei",
+    # not "Baeckerei") — normalize_description() can't recover a dropped
+    # letter, so this needs its own keyword alongside "bäckerei" above.
+    ("backerei", "Lebensmittel"),
+    ("konditorei", "Lebensmittel"),
+    ("lidl", "Lebensmittel"),
+    # The Spar chain's own receipt/statement text ("Spar dankt") rather than
+    # the bare brand name — "spar" alone would false-positive on "sparen"/
+    # "Sparen/Anlegen"-adjacent text.
+    ("spar dankt", "Lebensmittel"),
     # Restaurants/Ausgang
     ("pizza falcone", "Restaurants/Ausgang"),
     ("curry factory", "Restaurants/Ausgang"),
@@ -144,6 +155,23 @@ DEFAULT_CATEGORY_RULES = [
     # it's mapped here rather than under the generic "bäckerei" keyword
     # (Lebensmittel) below.
     ("steiner flughafebeck", "Restaurants/Ausgang"),
+    # More real vendors mined from Kevin's full statement history — small
+    # bakery/café/take-away stops where he's eating, not grocery shopping.
+    ("backer-imbiss", "Restaurants/Ausgang"),
+    ("take-away", "Restaurants/Ausgang"),
+    ("ristorante", "Restaurants/Ausgang"),
+    ("berggasthaus", "Restaurants/Ausgang"),
+    ("wal*cafe", "Restaurants/Ausgang"),
+    ("stadtspital triemli cafe", "Restaurants/Ausgang"),
+    ("estia home of taste", "Restaurants/Ausgang"),
+    ("tillystante", "Restaurants/Ausgang"),
+    # Cornercard's own comma-joined "MERCHANT,CITY" format has no space
+    # between words — the existing "pizza falcone" keyword (with a space)
+    # never matches it, so this is a second keyword for the same vendor.
+    ("pizzafalcone", "Restaurants/Ausgang"),
+    # Marché (SV Group) — a restaurant chain at Swiss train stations/
+    # airports/highway stops, e.g. "Marche-6137 Firehouse".
+    ("marche-", "Restaurants/Ausgang"),
     # Transport (checked before generic "twint" below due to length)
     ("sbb", "Transport"),
     ("sbb mobile", "Transport"),
@@ -156,19 +184,51 @@ DEFAULT_CATEGORY_RULES = [
     # Uber rides and refunds like "Rückerstattung ... UBER 00000 AMSTERDAM".
     ("uber", "Transport"),
     ("bergbahnen", "Freizeit"),
+    # Gas station brands and e-scooter/ride-share apps, mined from real
+    # statements — none of these are covered by the generic "tankstell"/
+    # "uber" keywords above.
+    ("shell", "Transport"),
+    ("socar", "Transport"),
+    ("dott scooter", "Transport"),
+    ("bolt.", "Transport"),
+    ("amag leasing", "Transport"),
     # Reisen
     ("swiss intl air lines", "Reisen"),
+    # Real vendors print the same airline with no spaces at all
+    # ("SwissIntlAirlines,Frankfurt") — the spaced keyword above never
+    # matches that; kept as a second keyword rather than replacing it, in
+    # case a spaced format ever does show up.
+    ("swissintlairlines", "Reisen"),
     ("easyjet", "Reisen"),
     ("emirates", "Reisen"),
     ("hotel", "Reisen"),
     ("airbnb", "Reisen"),
     ("meininger", "Reisen"),
+    ("getyourguide", "Reisen"),
+    ("airalo", "Reisen"),
     # Versicherungen
     ("ökk", "Versicherungen"),
     ("helsana", "Versicherungen"),
     ("axa leben", "Versicherungen"),
+    ("axa versicherungen", "Versicherungen"),
+    ("innova versicherungen", "Versicherungen"),
+    ("mobiliar versicherungsgesellschaft", "Versicherungen"),
+    ("swiss life", "Versicherungen"),
+    # Rega (Swiss air rescue) — an annual patronage membership, functionally
+    # the same kind of recurring protection payment as the insurers above.
+    ("rega,", "Versicherungen"),
     # Gesundheit
     ("apotheke", "Gesundheit"),
+    ("zahnarztpraxis", "Gesundheit"),
+    ("gynpraxis", "Gesundheit"),
+    ("gemeinschaftspraxis", "Gesundheit"),
+    ("shiatsu", "Gesundheit"),
+    ("physio-therapien", "Gesundheit"),
+    ("orthopaedie-technik", "Gesundheit"),
+    # Hospital visits — kept shorter/broader than "stadtspital triemli cafe"
+    # (Restaurants/Ausgang) below so the on-site café still wins for actual
+    # café purchases; this only catches the hospital itself.
+    ("stadtspital triemli", "Gesundheit"),
     # Shopping
     ("zalando", "Shopping"),
     ("digitec galaxus", "Shopping"),
@@ -185,13 +245,25 @@ DEFAULT_CATEGORY_RULES = [
     ("netflix", "Abos"),
     ("apple.com/bill", "Abos"),
     ("sayintentions", "Abos"),
+    ("salt mobile", "Abos"),
+    # digitec Galaxus's own subscription product — distinct from the plain
+    # "digitec galaxus"/"galaxus mobile" one-off purchases above (Shopping).
+    ("galaxus abos", "Abos"),
     # Freizeit
     ("steamgames", "Freizeit"),
     ("coiffure", "Freizeit"),
+    ("playstation network", "Freizeit"),
+    ("sanapark", "Freizeit"),
     # Bargeldbezug
     ("bezug zkb visa debit card", "Bargeldbezug"),
     # Sparen/Anlegen
     ("findependent", "Sparen/Anlegen"),
+    # ZKB's own pillar-3a app; the risk-strategy fund name appears in the
+    # statement text ("Frankly Risky").
+    ("frankly", "Sparen/Anlegen"),
+    # Miete/Wohnen
+    ("barth real ag", "Miete/Wohnen"),
+    ("elektrizitaetswerke", "Miete/Wohnen"),
     # Kreditkarten-Ausgleich — both sides of the "pay off the credit card
     # bill from the checking account" event: the credit-card statement's own
     # payment-received line ("Ihre Zahlung – Besten Dank", a credit) and the
@@ -217,12 +289,28 @@ DEFAULT_CATEGORY_RULES = [
     ("ubs - zahlungen div", "Sonstiges"),
     ("corporate benefits", "Sonstiges"),
     ("marko switzerland", "Sonstiges"),
-    # Privatüberweisungen — generic TWINT catch-all. Kept last / shortest on
-    # purpose: every merchant-routed "TWINT: X" line above has a longer,
-    # more specific keyword that must win first (categorize() prefers the
-    # longest matching keyword), so this only catches person-to-person
-    # transfers like "TWINT: SCHWARTZ, PATRICK +4176..." that have no
-    # merchant-specific rule.
+    # Cantonal tax withdrawal and generic bank transaction fees — no
+    # dedicated category for either, and both are clearly not everyday
+    # spending.
+    ("steuerbezug", "Sonstiges"),
+    ("zahlungsverkehrspreise", "Sonstiges"),
+    # Lohn/Einkommen — salary credits, identified by employer name as they
+    # appear on the statement's "Gutschrift Salär: ..." line.
+    ("gutschrift salaer: kanton", "Lohn/Einkommen"),
+    ("business systems integration", "Lohn/Einkommen"),
+    # Privatüberweisungen — recurring transfers to/from family, identified
+    # by name as they appear on the statement. Kept ahead of the generic
+    # "twint" catch-all below only by virtue of being longer/more specific,
+    # not by list position (categorize() always prefers the longest match).
+    ("jayaweera kevin oder fabienne", "Privatüberweisungen"),
+    ("fabienne brun", "Privatüberweisungen"),
+    ("jasmin xenia liviero", "Privatüberweisungen"),
+    # Generic TWINT catch-all. Kept last / shortest on purpose: every
+    # merchant-routed "TWINT: X" line above has a longer, more specific
+    # keyword that must win first (categorize() prefers the longest
+    # matching keyword), so this only catches person-to-person transfers
+    # like "TWINT: SCHWARTZ, PATRICK +4176..." that have no merchant-
+    # specific rule.
     ("twint", "Privatüberweisungen"),
 ]
 

@@ -114,6 +114,57 @@ def test_default_category_rules_recognize_common_fast_food_and_cafe_chains(tmp_p
     conn.close()
 
 
+def test_default_category_rules_recognize_patterns_mined_from_real_statements(tmp_path):
+    # Derived by analyzing Kevin's full real transaction history (a year of
+    # ZKB/Cornercard statements) for recurring merchants that were landing
+    # in "Unkategorisiert" — see the categorization-improvement pass this
+    # test documents. Each sample is the exact normalized text shape as it
+    # actually appears on his statements (e.g. ZKB drops umlauts as bare
+    # ASCII rather than folding them to "ae", unlike Cornercard).
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        return conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()["name"]
+
+    # Lebensmittel
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Backerei Stutz 0891 Auftrags-Nr.X") == "Lebensmittel"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Lidl Affoltern 0891 Auftrags-Nr.X") == "Lebensmittel"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, SPAR DANKT 0891 Affoltern Auftrags-Nr.X") == "Lebensmittel"
+    # Restaurants/Ausgang
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Lehmanns Backer-Imbiss 0540 Auftrags-Nr.X") == "Restaurants/Ausgang"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Sabsins Thai Take-Away 0450 Auftrags-Nr.X") == "Restaurants/Ausgang"
+    assert category_name("PIZZAFALCONE,BONSTETTEN") == "Restaurants/Ausgang"
+    # Transport
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Shell Birmensdorf 0890 Auftrags-Nr.X") == "Transport"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Dott scooter ride Auftrags-Nr.X") == "Transport"
+    # Reisen
+    assert category_name("SWISSINTLAIRLINES,FRANKFURTAM") == "Reisen"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, AIRALO 07990 Auftrags-Nr.X") == "Reisen"
+    # Gesundheit
+    assert category_name("Belastung Mobile Banking: Zahnarztpraxis Birmensdorf AG Auftrags-Nr.X") == "Gesundheit"
+    assert category_name("Belastung TWINT: STADTSPITAL TRIEMLI ZURICH Auftrags-Nr.X") == "Gesundheit"
+    # Versicherungen
+    assert category_name("Belastung TWINT: AXA VERSICHERUNGEN AG WINTERTHUR Auftrags-Nr.X") == "Versicherungen"
+    assert category_name("Belastung Mobile Banking: Swiss Life AG, General-Guisan-Quai 40, 8002 Auftrags-Nr.X") == "Versicherungen"
+    # Abos
+    assert category_name("Belastung eBill: Salt Mobile SA, Avenue de Malley 2, 1008 Prilly, CH Auftrags-Nr.X") == "Abos"
+    assert category_name("Belastung TWINT: GALAXUS ABOS ZURICH Auftrags-Nr.X") == "Abos"
+    # Sparen/Anlegen
+    assert category_name("Belastung Dauerauftrag: Frankly Risky, 8904 Aesch ZH, CH Auftrags-Nr.X") == "Sparen/Anlegen"
+    # Miete/Wohnen
+    assert category_name("Belastung Dauerauftrag: Otto Markwalder, c/o Barth Real AG, 8055 Auftrags-Nr.X") == "Miete/Wohnen"
+    # Lohn/Einkommen
+    assert category_name("Gutschrift Salär: Kanton Zürich, Walcheplatz 1, 8090 Zürich, CH Auftrags-Nr.X") == "Lohn/Einkommen"
+    assert category_name(
+        "Gutschrift Salär: BSI BUSINESS SYSTEMS INTEGRATION AG, TAEFERNWEG 1 CH Auftrags-Nr.X"
+    ) == "Lohn/Einkommen"
+    conn.close()
+
+
 def test_init_db_adds_learning_columns_to_category_rules(tmp_path):
     conn = init_db(tmp_path / "test.db")
 
