@@ -101,6 +101,138 @@ document.getElementById("add-category-btn").addEventListener("click", async () =
   await loadCategories();
 });
 
+// ---------- Konten ----------
+
+async function loadAccounts() {
+  const res = await fetch("/api/accounts");
+  const accounts = await res.json();
+  const container = document.getElementById("account-list");
+  if (accounts.length === 0) {
+    container.innerHTML = '<p class="panel-empty">Noch keine Konten — werden beim ersten Import automatisch angelegt.</p>';
+    return;
+  }
+  container.innerHTML = accounts.map((a) => `
+    <div class="settings-list-row" data-id="${a.id}">
+      <input type="text" class="settings-category-input" value="${escapeHtml(a.name)}">
+      <button type="button" class="btn-ghost btn-small" data-action="rename">Umbenennen</button>
+      <button type="button" class="btn-danger btn-small" data-action="delete">Löschen</button>
+    </div>
+  `).join("");
+}
+
+document.getElementById("account-list").addEventListener("click", async (event) => {
+  const row = event.target.closest(".settings-list-row");
+  if (!row) return;
+  const id = row.dataset.id;
+  const input = row.querySelector(".settings-category-input");
+
+  if (event.target.dataset.action === "rename") {
+    const newName = input.value.trim();
+    if (!newName) { alert("Name darf nicht leer sein."); return; }
+    const res = await fetch(`/api/accounts/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (!res.ok) {
+      const body = await res.json();
+      alert(body.error || "Fehler beim Umbenennen.");
+      return;
+    }
+    await loadAccounts();
+  }
+
+  if (event.target.dataset.action === "delete") {
+    const res = await fetch(`/api/accounts/${id}`, { method: "DELETE" });
+    if (res.status === 409) {
+      const deps = await res.json();
+      const parts = [];
+      if (deps.transaction_count) parts.push(`${deps.transaction_count} Buchung(en)`);
+      if (deps.pending_count) parts.push(`${deps.pending_count} offene Buchung(en)`);
+      alert(`Dieses Konto kann nicht gelöscht werden — verwendet von: ${parts.join(", ")}.`);
+      return;
+    }
+    if (!res.ok) {
+      const body = await res.json();
+      alert(body.error || "Fehler beim Löschen.");
+      return;
+    }
+    await loadAccounts();
+  }
+});
+
+// ---------- Tags ----------
+
+async function loadTags() {
+  const res = await fetch("/api/tags");
+  const tags = await res.json();
+  const container = document.getElementById("tag-list");
+  if (tags.length === 0) {
+    container.innerHTML = '<p class="panel-empty">Noch keine Tags. Füge unten einen hinzu.</p>';
+    return;
+  }
+  container.innerHTML = tags.map((t) => `
+    <div class="settings-list-row" data-id="${t.id}">
+      <input type="text" class="settings-category-input" value="${escapeHtml(t.name)}">
+      <button type="button" class="btn-ghost btn-small" data-action="rename">Umbenennen</button>
+      <button type="button" class="btn-danger btn-small" data-action="delete">Löschen</button>
+    </div>
+  `).join("");
+}
+
+document.getElementById("tag-list").addEventListener("click", async (event) => {
+  const row = event.target.closest(".settings-list-row");
+  if (!row) return;
+  const id = row.dataset.id;
+  const input = row.querySelector(".settings-category-input");
+
+  if (event.target.dataset.action === "rename") {
+    const newName = input.value.trim();
+    if (!newName) { alert("Name darf nicht leer sein."); return; }
+    const res = await fetch(`/api/tags/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (!res.ok) {
+      const body = await res.json();
+      alert(body.error || "Fehler beim Umbenennen.");
+      return;
+    }
+    await loadTags();
+  }
+
+  if (event.target.dataset.action === "delete") {
+    const confirmed = confirm("Diesen Tag wirklich löschen? Er wird von allen Buchungen entfernt.");
+    if (!confirmed) return;
+    const res = await fetch(`/api/tags/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const body = await res.json();
+      alert(body.error || "Fehler beim Löschen.");
+      return;
+    }
+    await loadTags();
+  }
+});
+
+document.getElementById("add-tag-btn").addEventListener("click", async () => {
+  const input = document.getElementById("new-tag-name");
+  const name = input.value.trim();
+  if (!name) { alert("Bitte einen Namen eingeben."); return; }
+  const res = await fetch("/api/tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const body = await res.json();
+    alert(body.error || "Fehler beim Hinzufügen.");
+    return;
+  }
+  input.value = "";
+  await loadTags();
+});
+
 // ---------- Automatische Kategorisierung / Dashboard settings ----------
 
 async function loadSettings() {
@@ -270,6 +402,8 @@ document.getElementById("theme-switcher").addEventListener("click", (event) => {
 
 (async function init() {
   await loadCategories();
+  await loadAccounts();
+  await loadTags();
   await loadSettings();
   updateThemeSwitcherUI();
 })();

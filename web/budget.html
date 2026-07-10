@@ -21,69 +21,74 @@
 
     <header class="app-header">
       <p class="app-title">Budget</p>
-      <div class="field">
-        <label class="field-label" for="budget-month">Monat</label>
-        <input type="month" id="budget-month">
+      <div class="widget-picker">
+        <button id="add-widget-btn" class="btn btn-ghost" type="button">+ Widget</button>
+        <div id="widget-picker-menu" class="widget-picker-menu hidden"></div>
       </div>
     </header>
 
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <p class="kpi-label">Einnahmen</p>
-        <p class="kpi-value credit tabular" id="kpi-income">0.00</p>
-      </div>
-      <div class="kpi-card">
-        <p class="kpi-label">Ausgaben</p>
-        <p class="kpi-value debit tabular" id="kpi-expense">0.00</p>
-      </div>
-      <div class="kpi-card">
-        <p class="kpi-label">Cashflow</p>
-        <p class="kpi-value tabular" id="kpi-net">0.00</p>
-      </div>
-      <div class="kpi-card">
-        <p class="kpi-label">Verfügbares Restbudget</p>
-        <p class="kpi-value tabular" id="kpi-remaining">—</p>
-      </div>
-    </div>
-
-    <div class="panels">
-      <div class="panel">
-        <div class="section-head">
-          <p class="section-title">Ausgaben nach Kategorie</p>
+    <div class="dashboard-toolbar">
+      <div class="dashboard-toolbar-row">
+        <div class="field">
+          <label class="field-label">Zeitraum</label>
+          <div id="granularity-picker" class="segmented">
+            <button type="button" class="segmented-option" data-granularity="day">Tag</button>
+            <button type="button" class="segmented-option" data-granularity="week">Woche</button>
+            <button type="button" class="segmented-option active" data-granularity="month">Monat</button>
+            <button type="button" class="segmented-option" data-granularity="quarter">Quartal</button>
+            <button type="button" class="segmented-option" data-granularity="year">Jahr</button>
+            <button type="button" class="segmented-option" data-granularity="custom">Benutzerdefiniert</button>
+          </div>
         </div>
-        <div id="category-donut" class="donut-wrap"></div>
-      </div>
-
-      <div class="panel">
-        <div class="section-head">
-          <p class="section-title">Top-Ausgabenkategorien</p>
+        <div class="field" id="custom-start-field">
+          <label class="field-label" for="filter-start">Von</label>
+          <input id="filter-start" type="date">
         </div>
-        <div id="top-categories"></div>
+        <div class="field" id="custom-end-field">
+          <label class="field-label" for="filter-end">Bis</label>
+          <input id="filter-end" type="date">
+        </div>
+        <label class="compare-toggle">
+          <input type="checkbox" id="compare-toggle">
+          Vorperiode vergleichen
+        </label>
+        <div class="toolbar-spacer"></div>
+      </div>
+      <div class="dashboard-toolbar-row">
+        <div class="field">
+          <label class="field-label" for="filter-account">Konto</label>
+          <select id="filter-account"><option value="">Alle Konten</option></select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="filter-category">Kategorie</label>
+          <select id="filter-category"><option value="">Alle Kategorien</option></select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="filter-tag">Tag</label>
+          <select id="filter-tag"><option value="">Alle Tags</option></select>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <button id="apply-filters-btn" class="btn btn-primary" type="button">Anwenden</button>
       </div>
     </div>
 
-    <div class="panel wide-panel">
-      <div class="section-head">
-        <p class="section-title">Cashflow-Entwicklung</p>
-        <span class="section-note">Letzte 12 Monate</span>
-      </div>
-      <div id="cashflow-chart"></div>
-    </div>
-
-    <div class="section-head">
-      <p class="section-title">Budgets pro Kategorie</p>
-    </div>
-    <div id="budget-rows"></div>
-    <div class="budget-add-row">
-      <select id="new-budget-category"></select>
-      <input type="number" id="new-budget-amount" placeholder="Betrag CHF" step="1" min="0">
-      <button id="add-budget-btn" class="btn btn-primary" type="button">Budget hinzufügen</button>
-    </div>
+    <div id="dashboard-grid" class="dashboard-grid"></div>
 
   </div>
+  </div>
+
+  <div id="drilldown-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <p class="modal-title" id="drilldown-title">Details</p>
+        <button type="button" class="modal-close" id="drilldown-close">&times;</button>
+      </div>
+      <div class="modal-body" id="drilldown-body"></div>
+    </div>
   </div>
 
   <script src="/sidebar.js"></script>
-  <script src="/budget.js"></script>
+  <script src="/charts.js"></script>
+  <script src="/dashboard.js"></script>
 </body>
 </html>

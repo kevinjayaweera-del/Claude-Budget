@@ -15,6 +15,7 @@
   --confidence-low: #b8860b;
 
   --cat-lebensmittel: #7a8b5c;
+  --cat-restaurants-ausgang: #c1614a;
   --cat-miete-wohnen: #6b7a99;
   --cat-freizeit: #c7955a;
   --cat-transport: #5b8c87;
@@ -24,6 +25,24 @@
   --cat-abos: #6e6a8c;
   --cat-sonstiges: #8a8a82;
   --cat-unkategorisiert: #b5b3a8;
+  --cat-reisen: #4f9dab;
+  --cat-bargeldbezug: #b5a642;
+  --cat-privatuberweisungen: #9c6b9e;
+  --cat-sparen-anlegen: #4f8f6b;
+  --cat-lohn-einkommen: #3f7d4f;
+  --cat-kreditkarten-ausgleich: #7d7266;
+
+  /* Chart series palette — used for non-category series (income/expense/
+     net, forecast, comparison periods) where a category color doesn't
+     apply. Kept separate from the category palette above so the two never
+     visually collide within the same chart. */
+  --series-1: #b03a2e;
+  --series-2: #3c6e52;
+  --series-3: #5b8c87;
+  --series-4: #c7955a;
+  --series-5: #8c7aa6;
+  --series-6: #4f9dab;
+  --series-forecast: #a6a498;
 
   --font-display: "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-body: -apple-system, "Segoe UI", system-ui, sans-serif;
@@ -642,9 +661,11 @@ td.amount.debit { color: var(--debit); }
 .budget-fill.ok { background: var(--credit); }
 .budget-fill.warn { background: var(--confidence-low); }
 .budget-fill.over { background: var(--debit); }
-.budget-row-actions { display: flex; align-items: center; gap: 0.5rem; }
+.budget-row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
 .budget-limit-input {
   width: 6.5rem;
+  min-width: 0;
+  flex-shrink: 1;
   font-size: 13px;
   font-family: var(--font-mono);
   color: var(--ink);
@@ -678,6 +699,315 @@ td.amount.debit { color: var(--debit); }
 @media (max-width: 520px) {
   .kpi-grid { grid-template-columns: 1fr; }
   .budget-add-row { flex-wrap: wrap; }
+}
+
+/* ---------- Chart engine (charts.js) ---------- */
+.chart-root { width: 100%; }
+.chart-svg { display: block; overflow: visible; }
+.chart-axis-label { font-size: 10px; fill: var(--ink-faint); font-family: var(--font-body); }
+.chart-mark { cursor: pointer; transition: opacity 0.1s; }
+.chart-mark:hover { opacity: 0.75; }
+
+.chart-tooltip {
+  position: fixed;
+  z-index: 200;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: var(--radius-control);
+  padding: 0.5rem 0.7rem;
+  font-size: 12px;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  max-width: 240px;
+}
+.chart-tooltip.hidden { display: none; }
+.chart-tooltip-label { font-weight: 600; margin-bottom: 0.25rem; }
+.chart-tooltip-row { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.chart-tooltip-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem 0.25rem 0.45rem;
+  cursor: pointer;
+}
+.chart-legend-item.off { color: var(--ink-faint); text-decoration: line-through; }
+.chart-legend-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid; flex-shrink: 0; }
+
+.chart-pie-wrap { display: flex; justify-content: center; }
+.chart-donut-total {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  fill: var(--ink);
+  text-anchor: middle;
+}
+
+.chart-brush { margin-top: 0.4rem; }
+.chart-brush-svg { display: block; touch-action: none; }
+.chart-brush-hint {
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin: 0.3rem 0 0;
+  text-align: center;
+}
+.chart-brush-reset {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* ---------- Dashboard widget shell ---------- */
+.dashboard-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 1.5rem;
+}
+.dashboard-toolbar .toolbar-spacer { flex: 1; }
+.dashboard-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.9rem;
+  width: 100%;
+}
+.dashboard-toolbar-row .field { min-width: 0; }
+.compare-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.kpi-compare {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+.kpi-compare.up { color: var(--credit); }
+.kpi-compare.down { color: var(--debit); }
+.kpi-compare.flat { color: var(--ink-faint); }
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.widget {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 1.1rem 1.25rem 1.3rem;
+  grid-column: span 4;
+  min-width: 0;
+}
+.widget[data-size="sm"] { grid-column: span 1; }
+.widget[data-size="md"] { grid-column: span 2; }
+.widget[data-size="lg"] { grid-column: span 3; }
+.widget[data-size="full"] { grid-column: span 4; }
+.widget.kpi-widget { padding: 1.1rem 1.25rem; }
+.widget.dragging { opacity: 0.4; }
+.widget.drag-over { outline: 2px dashed var(--accent); outline-offset: 2px; }
+
+.widget-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+.widget-drag-handle {
+  cursor: grab;
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1;
+  user-select: none;
+}
+.widget-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.widget-actions { display: flex; align-items: center; gap: 0.15rem; }
+.widget-action-btn {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0.2rem 0.35rem;
+  border-radius: var(--radius-control);
+  line-height: 1;
+}
+.widget-action-btn:hover { background: var(--surface-sunken); color: var(--ink); }
+.widget.kpi-widget .widget-head { margin-bottom: 0.5rem; }
+.widget-kpi-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  flex: 1;
+}
+.widget-kpi-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 500;
+  margin: 0;
+}
+.widget-kpi-value.credit { color: var(--credit); }
+.widget-kpi-value.debit { color: var(--debit); }
+
+.widget-picker {
+  position: relative;
+}
+.widget-picker-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  padding: 0.5rem;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.widget-picker-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-size: 13px;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+.widget-picker-item:hover { background: var(--surface-sunken); }
+.widget-picker-empty { font-size: 12px; color: var(--ink-faint); padding: 0.5rem 0.6rem; }
+
+@media (max-width: 980px) {
+  .widget[data-size="sm"], .widget[data-size="md"], .widget[data-size="lg"], .widget[data-size="full"] {
+    grid-column: span 2;
+  }
+  .dashboard-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+  .widget[data-size="sm"], .widget[data-size="md"], .widget[data-size="lg"], .widget[data-size="full"] {
+    grid-column: span 1;
+  }
+  .dashboard-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------- Modal (drill-down) ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 100;
+}
+.modal-card {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  border: 1px solid var(--line);
+  width: min(760px, 100%);
+  max-height: min(640px, 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+.modal-title { font-family: var(--font-display); font-size: 15px; font-weight: 700; margin: 0; }
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0.2rem;
+}
+.modal-close:hover { color: var(--ink); }
+.modal-body { overflow-y: auto; padding: 0; }
+.modal-body .ledger { border: none; border-radius: 0; margin-bottom: 0; }
+
+/* ---------- Tag chips (transaction rows) ---------- */
+.tag-chip-list { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 11px;
+  padding: 0.15rem 0.4rem 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.tag-chip-remove {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 0.1rem;
+}
+.tag-chip-remove:hover { color: var(--debit); }
+.tag-add-select {
+  font-size: 11px;
+  color: var(--ink-faint);
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  padding: 0.12rem 0.4rem;
 }
 
 /* ---------- Settings page ---------- */
@@ -813,10 +1143,12 @@ td.amount.debit { color: var(--debit); }
 /* Segmented control */
 .segmented {
   display: inline-flex;
+  flex-wrap: wrap;
   background: var(--surface-sunken);
   border-radius: var(--radius-control);
   padding: 3px;
   gap: 2px;
+  max-width: 100%;
 }
 .segmented-option {
   font-size: 12px;

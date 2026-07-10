@@ -1,4 +1,5 @@
 let categories = [];
+let allTags = [];
 
 const CATEGORY_COLORS = {
   "Lebensmittel": "var(--cat-lebensmittel)",
@@ -55,6 +56,11 @@ function applyDefaultDateRange(days) {
 async function loadAppSettings() {
   const settings = await fetch("/api/settings").then((r) => r.json());
   applyDefaultDateRange(settings.default_date_range_days);
+}
+
+async function loadAllTags() {
+  const res = await fetch("/api/tags");
+  allTags = await res.json();
 }
 
 async function loadSources() {
@@ -120,16 +126,51 @@ async function loadTransactions() {
     const currencyTag = row.currency && row.currency !== "CHF"
       ? ` <span class="currency-tag">${escapeHtml(row.currency)}</span>`
       : "";
+    const rowTags = row.tags || [];
+    const tagChips = rowTags.map((t) => `
+      <span class="tag-chip" data-tag-id="${t.id}">${escapeHtml(t.name)}<button type="button" class="tag-chip-remove" data-action="remove-tag" data-tag-id="${t.id}" title="Entfernen">&times;</button></span>
+    `).join("");
+    const assignableTags = allTags.filter((t) => !rowTags.some((rt) => rt.id === t.id));
+    const addTagSelect = assignableTags.length > 0
+      ? `<select class="tag-add-select" data-action="add-tag">
+          <option value="">+ Tag</option>
+          ${assignableTags.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("")}
+        </select>`
+      : "";
+    tr.dataset.transactionId = row.id;
     tr.innerHTML = `
       <td class="date mono">${escapeHtml(formatDateSwiss(row.date))}</td>
       <td class="desc">${escapeHtml(row.description)}</td>
       <td><span class="chip"><span class="dot" style="background: ${color}"></span>${escapeHtml(categoryName)}</span></td>
       <td>${escapeHtml(row.source)}</td>
+      <td><div class="tag-chip-list">${tagChips}${addTagSelect}</div></td>
       <td class="amount ${isCredit ? "credit" : "debit"} tabular">${sign}${amountStr}${currencyTag}</td>
     `;
     tbody.appendChild(tr);
   });
 }
+
+document.querySelector("#transactions-table tbody").addEventListener("click", async (event) => {
+  if (event.target.dataset.action !== "remove-tag") return;
+  const tr = event.target.closest("tr");
+  const transactionId = tr.dataset.transactionId;
+  const tagId = event.target.dataset.tagId;
+  await fetch(`/api/transactions/${transactionId}/tags/${tagId}`, { method: "DELETE" });
+  await loadTransactions();
+});
+
+document.querySelector("#transactions-table tbody").addEventListener("change", async (event) => {
+  if (event.target.dataset.action !== "add-tag" || !event.target.value) return;
+  const tr = event.target.closest("tr");
+  const transactionId = tr.dataset.transactionId;
+  const tagId = event.target.value;
+  await fetch(`/api/transactions/${transactionId}/tags`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tag_id: parseInt(tagId, 10) }),
+  });
+  await loadTransactions();
+});
 
 function renderCategoryBars(byCategory) {
   const container = document.getElementById("category-bars");
@@ -229,5 +270,6 @@ document.getElementById("apply-filters-btn").addEventListener("click", refreshDa
   await loadAppSettings();
   await loadCategories();
   await loadSources();
+  await loadAllTags();
   await refreshDashboard();
 })();
