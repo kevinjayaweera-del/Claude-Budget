@@ -223,6 +223,42 @@ def register_routes(app):
         conn.close()
         return jsonify([dict(r) for r in rows])
 
+    @app.route("/api/imported-files", methods=["GET"])
+    def list_imported_files():
+        # Per-file totals for reconciling against the original statement —
+        # combines transactions (already confirmed) and pending_transactions
+        # (not yet confirmed) for the same file_id, since a scan's rows can
+        # be partially confirmed (confirm_import accepts a subset of ids).
+        # Unlike /api/pending's file grouping (by the raw source string,
+        # only ever the current unconfirmed batch), this persists for every
+        # file ever imported, confirmed or not.
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT f.id, f.filename, f.source, f.imported_at, "
+            "COALESCE(t.cnt, 0) + COALESCE(p.cnt, 0) AS transaction_count, "
+            "COALESCE(t.income, 0) + COALESCE(p.income, 0) AS income_cents, "
+            "COALESCE(t.expense, 0) + COALESCE(p.expense, 0) AS expense_cents "
+            "FROM imported_files f "
+            "LEFT JOIN ("
+            "  SELECT file_id, COUNT(*) AS cnt, "
+            "  SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END) AS income, "
+            "  SUM(CASE WHEN amount_cents < 0 THEN amount_cents ELSE 0 END) AS expense "
+            "  FROM transactions GROUP BY file_id"
+            ") t ON t.file_id = f.id "
+            "LEFT JOIN ("
+            "  SELECT file_id, COUNT(*) AS cnt, "
+            "  SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END) AS income, "
+            "  SUM(CASE WHEN amount_cents < 0 THEN amount_cents ELSE 0 END) AS expense "
+            "  FROM pending_transactions GROUP BY file_id"
+            ") p ON p.file_id = f.id "
+            "ORDER BY f.imported_at DESC"
+        ).fetchall()
+        conn.close()
+        result = [dict(r) for r in rows]
+        for r in result:
+            r["net_cents"] = r["income_cents"] + r["expense_cents"]
+        return jsonify(result)
+
     @app.route("/api/pending/<int:pending_id>", methods=["PUT"])
     def update_pending(pending_id):
         data = request.get_json(silent=True)

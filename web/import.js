@@ -46,46 +46,32 @@ function updateImportKpis(total, autoAssigned, needsReview) {
   document.getElementById("kpi-needs-review").textContent = needsReview;
 }
 
-// Grouped by source (the filename-derived string every pending row already
-// carries) so the debit/credit/net totals can be eyeballed against the
-// "Total Belastungen"/"Total Gutschriften" a bank or card statement prints
-// on its own last page — the same reconciliation check used to verify the
-// PDF/CSV parsers actually captured every booking.
-function renderFileTotals(rows) {
+// One row per file ever scanned (GET /api/imported-files), confirmed or
+// still pending — so the count/income/expense/net totals stay available to
+// eyeball against the "Total Belastungen"/"Total Gutschriften" a bank or
+// card statement prints on its own last page, even after "Import
+// bestätigen" clears the pending queue. Unlike grouping pending rows by
+// their raw source string, this persists for the whole import history.
+async function loadFileTotals() {
+  const files = await fetch("/api/imported-files").then((r) => r.json());
   const section = document.getElementById("file-totals-section");
   const tbody = document.querySelector("#file-totals-table tbody");
-  if (rows.length === 0) {
+  if (files.length === 0) {
     section.classList.add("hidden");
     tbody.innerHTML = "";
     return;
   }
   section.classList.remove("hidden");
 
-  const bySource = new Map();
-  rows.forEach((row) => {
-    if (!bySource.has(row.source)) {
-      bySource.set(row.source, { count: 0, debits: 0, credits: 0 });
-    }
-    const entry = bySource.get(row.source);
-    entry.count += 1;
-    if (row.amount_cents < 0) entry.debits += row.amount_cents;
-    else entry.credits += row.amount_cents;
-  });
-
-  const sortedSources = [...bySource.keys()].sort();
-  tbody.innerHTML = sortedSources.map((source) => {
-    const entry = bySource.get(source);
-    const net = entry.debits + entry.credits;
-    return `
-      <tr>
-        <td class="desc">${escapeHtml(source)}</td>
-        <td class="num tabular">${entry.count}</td>
-        <td class="num tabular debit">${formatMoney(entry.debits)}</td>
-        <td class="num tabular credit">${formatMoney(entry.credits)}</td>
-        <td class="num tabular ${net >= 0 ? "credit" : "debit"}">${formatMoney(net)}</td>
-      </tr>
-    `;
-  }).join("");
+  tbody.innerHTML = files.map((f) => `
+    <tr>
+      <td class="desc">${escapeHtml(f.filename)}</td>
+      <td class="num tabular">${f.transaction_count}</td>
+      <td class="num tabular debit">${formatMoney(f.expense_cents)}</td>
+      <td class="num tabular credit">${formatMoney(f.income_cents)}</td>
+      <td class="num tabular ${f.net_cents >= 0 ? "credit" : "debit"}">${formatMoney(f.net_cents)}</td>
+    </tr>
+  `).join("");
 }
 
 async function loadPending() {
@@ -98,7 +84,7 @@ async function loadPending() {
   autoAcceptedPendingIds = [];
 
   updateEmptyState(rows.length > 0);
-  renderFileTotals(rows);
+  await loadFileTotals();
   if (rows.length === 0) {
     updateImportKpis(0, 0, 0);
     section.classList.add("hidden");
