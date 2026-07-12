@@ -148,15 +148,20 @@ async function savePendingRow(tr) {
 }
 
 function showScanStatus(newPending, duplicatesSkipped) {
+  // Deliberately says "importiert", not "zur Prüfung" — newPending is every
+  // row the scan just created, most of which loadPending() (called right
+  // after this) will silently auto-accept without a manual look. Claiming
+  // all of them need review here duplicated the exact bug the badge below
+  // already had: a number bigger than what's actually in the review table.
   const status = document.getElementById("scan-status");
   if (newPending === 0 && duplicatesSkipped === 0) {
     status.textContent = "Keine neuen Dateien gefunden.";
   } else if (newPending === 0 && duplicatesSkipped > 0) {
     status.textContent = `Alle ${duplicatesSkipped} gefundenen Buchungen sind bereits vorhanden — keine neuen Buchungen.`;
   } else if (duplicatesSkipped > 0) {
-    status.textContent = `${duplicatesSkipped} Dopplungen übersprungen, ${newPending} neue Buchungen zur Prüfung.`;
+    status.textContent = `${duplicatesSkipped} Dopplungen übersprungen, ${newPending} neue Buchungen importiert.`;
   } else {
-    status.textContent = `${newPending} neue Buchungen zur Prüfung.`;
+    status.textContent = `${newPending} neue Buchungen importiert.`;
   }
   status.classList.remove("hidden");
 }
