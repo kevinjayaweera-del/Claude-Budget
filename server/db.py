@@ -159,6 +159,14 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # generic word that reliably signals a food wholesaler/supplier
         # regardless of the specific company name.
         "tegutfiliale", "nahrungsmittel", "new asia market", "asia store",
+        # Third real-data mining pass (18 months of statements after the ZKB
+        # export was extended back to May 2025). "tegut" (bare) supplements
+        # "tegutfiliale" above — a second observed format has a space
+        # ("Tegut Filiale") that the no-space keyword doesn't match. Aldi
+        # (both "Aldi Suisse" and German "ALDI SUeD") and k kiosk (Swiss
+        # newsstand/convenience chain, both "kkiosk" and "k kiosk" spellings
+        # seen) are well-known chains not yet covered.
+        "tegut", "aldi", "kkiosk", "k kiosk",
     ],
     "Restaurants/Ausgang": [
         # Generic dining-out words — catch any vendor that doesn't match a
@@ -218,6 +226,11 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # locations; "Reinhard AG" likewise.
         "bankhausmetzler", "bankhaus metzler", "reinhard ag",
         "hauptsitz postfinance",
+        # Third real-data mining pass. "marche take away" is a second
+        # observed Marché format (space-separated, no hyphen) that "marche-"
+        # above doesn't match. "marcos" recurs as a Frankfurt restaurant
+        # across both the ZKB and Swisscard statements.
+        "marche take away", "marcos",
     ],
     "Transport": [
         "sbb", "sbb mobile", "tankstell", "parkingpay", "taxifahrt",
@@ -274,6 +287,9 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # functionally the same kind of recurring protection payment as
         # the insurers above.
         "rega,",
+        # Third real-data mining pass: one of Switzerland's largest general
+        # insurers, not yet covered.
+        "allianz suisse",
     ],
     "Gesundheit": [
         "apotheke",
@@ -298,6 +314,10 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # name so it also catches other Hirslanden-branded facilities, not
         # just this specific headache clinic).
         "amavita", "hirslanden",
+        # Third real-data mining pass: a veterinary practice (recurs twice,
+        # closest fit here since there's no dedicated pet-care category) and
+        # an optician chain, consistent with "fielmann" above.
+        "tierarztpraxis", "foto-optik",
     ],
     "Shopping": [
         "zalando", "digitec galaxus", "galaxus mobile", "media markt",
@@ -318,6 +338,28 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # retailer, and a children's-clothing brand bought via Klarna.
         "canyon", "suspension center", "bike-import", "fielmann", "zooplus",
         "ehrenkind",
+        # Third real-data mining pass: well-known clothing chains (Zara, H&M
+        # bought directly rather than via Klarna, C&A, Uniqlo, Mango), a
+        # furniture chain (XXXLutz), a sporting-goods chain (Ochsner Sport),
+        # a books/media retailer (Ex Libris), a personalized photo-print
+        # shop (Kartenmacherei, both spellings observed), a sportswear
+        # brand (Odlo), and a drugstore chain (dm, both the "DM-Drogerie
+        # Markt" and truncated "DM-FIL." formats seen).
+        "zara", "h & m", "c & a", "uniqlo", "mango", "xxxlutz",
+        "ochsner sport", "ex libris", "die kartenmacherei", "kartenmacherei",
+        "odlo", "dm-drogerie", "dm-fil",
+        # Buy-now-pay-later checkout providers — the actual bank debit
+        # collecting an earlier online purchase, not a duplicate of it (no
+        # separate "purchase" line exists for a BNPL checkout, unlike the
+        # credit-card settlement pattern — this debit IS the real expense).
+        # "riverty" was observed specifically settling an Amazon order;
+        # "klarna" (bare) supplements the existing H&M-specific keywords
+        # above to also catch Klarna-routed purchases from other merchants.
+        "riverty", "klarna",
+        # Amazon's own bare domain, as printed by ZKB ("AMAZON.DE*...") —
+        # distinct from the existing "amzn" abbreviation above, which
+        # doesn't match this format.
+        "amazon",
     ],
     "Abos": [
         "spotify", "netflix", "apple.com/bill", "sayintentions",
@@ -329,10 +371,26 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # Second real-data mining pass: a fitness-tracker subscription and
         # a content-subscription platform.
         "whoop", "onlyfans",
+        # Third real-data mining pass: common software subscriptions.
+        "adobe", "microsoft",
     ],
     "Freizeit": [
         "steamgames", "coiffure", "playstation network", "sanapark",
-        "bergbahnen",
+        # Shortened from "bergbahnen" (plural, generic) to "bergbah" — the
+        # PDF's own column width truncates longer merchant names, and a real
+        # statement line cut it to "...Bergbah" (missing "nen"), which the
+        # longer keyword never matched.
+        "bergbah",
+        # Third real-data mining pass: a flight-simulator addon store
+        # (confirmed via web search — iniBuilds, consistent with the
+        # existing "sayintentions"/"navigraph" flight-sim subscriptions
+        # under Abos, but this was a one-off addon purchase, not a
+        # subscription), a named mountain railway and a lake ferry (both
+        # recur, and aren't caught by the generic "bergbah" above since
+        # they're not phrased as "...Bergbahn"), cinema chains, and a
+        # recurring yoga-studio membership.
+        "spinibuilds", "inibuilds", "stockhornbahn", "zurichsee-fahre",
+        "arena cinemas", "cinema 8", "deinyogaweg",
     ],
     "Bargeldbezug": [
         "bezug zkb visa debit card",
@@ -397,6 +455,13 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # Kevin identified these as Sonstiges after they showed up too
         # ambiguous to guess in the second mining pass.
         "echst.net", "nvg zentrum",
+        # Third real-data mining pass: SERAFE (confirmed via web search —
+        # the mandatory Swiss radio/TV reception fee collector, the
+        # replacement for the old Billag) and the cantonal road-traffic
+        # office (vehicle registration/road tax, recurs twice) — both
+        # administrative fees, matching "steuerbezug"/"bevölkerungsamt"
+        # above rather than any spending category.
+        "serafe", "strassenverkehrsamt",
     ],
     "Lohn/Einkommen": [
         # Any "Gutschrift Salär: <employer>" line, regardless of employer
@@ -408,10 +473,31 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # appear on the statement.
         "jayaweera kevin oder fabienne", "fabienne brun",
         "jasmin xenia liviero", "kevin jayaweera",
+        # Third real-data mining pass: a second name format for the same
+        # person as "fabienne brun" above — ZKB prints the family member's
+        # name differently depending on the transaction type (Dauerauftrag
+        # vs. Mobile Banking), and word order means neither existing
+        # keyword is a substring of this one.
+        "fabienne jayaweera",
         # ZKB's own transaction-type label for any account-to-account
         # transfer — broader than the name-specific keywords above, so a
         # transfer to/from someone not yet named here is still recognized
         # instead of needing a new rule added.
+        #
+        # NOT extended with a matching generic keyword for the INCOMING
+        # side ("Gutschrift Auftraggeber: <sender>, <address>"), even
+        # though it looks like the natural mirror image of this one —
+        # tried during the third mining pass and reverted. That prefix is
+        # also how insurer reimbursements ("...Auftraggeber: Helsana
+        # Versicherungen AG...", "...Protekta Rechtsschutz..."), a school-
+        # district payment ("...Primarschulgemeinde...") and other already-
+        # correctly-categorized credits are worded, and several of their
+        # specific keywords are shorter than any safe generic phrase would
+        # be — categorize() prefers the longest match, so the generic
+        # catch-all kept winning and misfiling them as plain transfers.
+        # "kontouebertrag" is safe because it's ZKB's own fixed internal
+        # label, never reused for a company; no equivalent fixed label
+        # exists for incoming Auftraggeber-style credits.
         "kontouebertrag",
         # Generic TWINT catch-all. Kept last / shortest on purpose: every
         # merchant-routed "TWINT: X" line above has a longer, more specific
