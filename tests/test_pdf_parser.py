@@ -227,6 +227,55 @@ def test_parse_columned_row_credit_is_positive():
     }
 
 
+def test_parse_columned_row_ihre_zahlung_in_gutschrift_column_is_still_a_debit():
+    # Cornercard's own PDF prints "Ihre Zahlung" under an actual Gutschrift
+    # column (unlike Swisscard, which has no columns at all — see the
+    # line-based fallback tests above). Real bug: the card statement's own
+    # bookkeeping shows a bill payment as a credit (it reduces the balance
+    # owed), but it's money Kevin sent FROM his checking account, never
+    # money he received — it must land negative regardless of which column
+    # the PDF prints it under.
+    columns = _find_columns([HEADER_ROW])
+    row = [
+        _word("06.05.2026", 56.7, 96.7, 320.0),
+        _word("Ihre", 102.0, 120.0, 320.0),
+        _word("Zahlung", 122.0, 150.0, 320.0),
+        _word("4'752.95", 651.9, 688.8, 320.0),
+    ]
+
+    result = _parse_columned_row(row, columns)
+
+    assert result == {
+        "date": "2026-05-06",
+        "description": "Ihre Zahlung",
+        "amount_cents": -475295,
+        "currency": "CHF",
+    }
+
+
+def test_parse_columned_row_einzahlung_in_gutschrift_column_stays_a_credit():
+    # Regression guard: the payment-detection keywords are "ihre zahlung"/
+    # "ihrezahlung" specifically, not a bare "zahlung" — ZKB's own
+    # "Einzahlung" (a real cash deposit, a genuine credit) contains
+    # "zahlung" as a substring and must NOT be flipped to a debit.
+    columns = _find_columns([HEADER_ROW])
+    row = [
+        _word("20.06.2026", 56.7, 96.7, 320.0),
+        _word("Einzahlung", 102.0, 150.0, 320.0),
+        _word("Noten", 152.0, 180.0, 320.0),
+        _word("3'260.00", 651.9, 688.8, 320.0),
+    ]
+
+    result = _parse_columned_row(row, columns)
+
+    assert result == {
+        "date": "2026-06-20",
+        "description": "Einzahlung Noten",
+        "amount_cents": 326000,
+        "currency": "CHF",
+    }
+
+
 def test_parse_columned_row_captures_pending_reservation_without_valuta_or_saldo():
     # Some rows (temporary card-reservation holds) have a date and a debit
     # amount but no Valuta/Saldo — they should still be captured.

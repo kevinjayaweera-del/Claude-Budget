@@ -14,18 +14,28 @@ AMOUNT_RE = re.compile(r"([+-]?\d{1,3}(?:['’]?\d{3})*[.,]\d{2})\s*$")
 # Real credit-card statements (Swisscard/Cornercard) parsed via this fallback
 # carry no per-line sign at all — every listed amount, purchase or payment
 # alike, is a bare positive number. An unsigned amount always defaults to a
-# debit (expense) here, including the cardholder's own bill payment
-# ("Ihre Zahlung – Besten Dank" / "IHREZAHLUNG-BESTENDANK"): on the card's
-# own statement that line is a Gutschrift (it reduces the balance owed), but
+# debit (expense) here.
+#
+# The cardholder's own bill payment ("Ihre Zahlung – Besten Dank" /
+# "IHREZAHLUNG-BESTENDANK") is always forced to a debit too — on the card's
+# own statement it's a Gutschrift (it reduces the balance owed), and
+# Cornercard prints it under an actual Gutschrift COLUMN (see
+# _parse_columned_row below), not just as an unsigned line — but either way
 # it represents real money Kevin sent FROM his checking account, never money
-# he received — storing it positive made it render as income in the ledger,
+# he received. Storing it positive made it render as income in the ledger,
 # even though the matching "ihre zahlung" categorizer rule (see
 # DEFAULT_CATEGORY_RULES in server/db.py) already excludes it from every
 # total via Kreditkarten-Ausgleich. The corresponding ZKB-side debit that
 # actually settles the card is already negative, so this keeps both halves
-# of the same real-world payment on the same side of zero. An explicit
-# "+"/"-" sign, if a statement format ever includes one, still overrides
-# this default (see the refund case below).
+# of the same real-world payment on the same side of zero. Detected by
+# keyword rather than column/sign position, since it's the one line whose
+# true direction contradicts how its own statement prints it. Deliberately
+# these two specific phrases, not a bare "zahlung" — the same false-positive
+# risk the "Kreditkarten-Ausgleich" categorization rule already documents
+# (server/db.py): "zahlung" alone would also match ZKB's own "Einzahlung"
+# (a real cash deposit, a genuine credit) and "Zahlungszweck"/"Ratenzahlung"-
+# style text, none of which are the cardholder's own bill payment.
+_PAYMENT_KEYWORDS = ("ihre zahlung", "ihrezahlung")
 
 # "Stand Ihres Cashbacks per Rechnungsdatum 11.12.2025 CHF 81.81" — a running
 # cashback-balance summary printed near the end of every Swisscard
@@ -270,11 +280,18 @@ def _parse_columned_row(row, columns, statement_period=None):
         return None
 
     magnitude = abs(_amount_to_cents(amount_word["text"]))
+    # Cornercard prints "Ihre Zahlung" under this same Gutschrift column
+    # (see _PAYMENT_KEYWORDS above) — a debit for our purposes despite
+    # landing in the credit column, since it's money Kevin sent out, not
+    # money he received.
+    is_payment = credit is not None and any(
+        keyword in description.lower() for keyword in _PAYMENT_KEYWORDS
+    )
 
     return {
         "date": _to_iso_date(first["text"], statement_period),
         "description": description,
-        "amount_cents": -magnitude if debit is not None else magnitude,
+        "amount_cents": -magnitude if (debit is not None or is_payment) else magnitude,
         "currency": "CHF",
     }
 
