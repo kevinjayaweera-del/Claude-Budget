@@ -34,10 +34,58 @@ function updateEmptyState(hasPending) {
   document.getElementById("import-empty-state").classList.toggle("hidden", hasPending);
 }
 
-function updatePendingCountBadge(total) {
-  const badge = document.getElementById("pending-count-badge");
-  document.getElementById("pending-count-value").textContent = total;
-  badge.classList.toggle("hidden", total === 0);
+function formatMoney(cents) {
+  return (cents / 100).toLocaleString("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function updateImportKpis(total, autoAssigned, needsReview) {
+  const kpis = document.getElementById("import-kpis");
+  kpis.classList.toggle("hidden", total === 0);
+  document.getElementById("kpi-total-imported").textContent = total;
+  document.getElementById("kpi-auto-assigned").textContent = autoAssigned;
+  document.getElementById("kpi-needs-review").textContent = needsReview;
+}
+
+// Grouped by source (the filename-derived string every pending row already
+// carries) so the debit/credit/net totals can be eyeballed against the
+// "Total Belastungen"/"Total Gutschriften" a bank or card statement prints
+// on its own last page — the same reconciliation check used to verify the
+// PDF/CSV parsers actually captured every booking.
+function renderFileTotals(rows) {
+  const section = document.getElementById("file-totals-section");
+  const tbody = document.querySelector("#file-totals-table tbody");
+  if (rows.length === 0) {
+    section.classList.add("hidden");
+    tbody.innerHTML = "";
+    return;
+  }
+  section.classList.remove("hidden");
+
+  const bySource = new Map();
+  rows.forEach((row) => {
+    if (!bySource.has(row.source)) {
+      bySource.set(row.source, { count: 0, debits: 0, credits: 0 });
+    }
+    const entry = bySource.get(row.source);
+    entry.count += 1;
+    if (row.amount_cents < 0) entry.debits += row.amount_cents;
+    else entry.credits += row.amount_cents;
+  });
+
+  const sortedSources = [...bySource.keys()].sort();
+  tbody.innerHTML = sortedSources.map((source) => {
+    const entry = bySource.get(source);
+    const net = entry.debits + entry.credits;
+    return `
+      <tr>
+        <td class="desc">${escapeHtml(source)}</td>
+        <td class="num tabular">${entry.count}</td>
+        <td class="num tabular debit">${formatMoney(entry.debits)}</td>
+        <td class="num tabular credit">${formatMoney(entry.credits)}</td>
+        <td class="num tabular ${net >= 0 ? "credit" : "debit"}">${formatMoney(net)}</td>
+      </tr>
+    `;
+  }).join("");
 }
 
 async function loadPending() {
@@ -45,14 +93,14 @@ async function loadPending() {
   const rows = await res.json();
   const section = document.getElementById("pending-section");
   const ledger = document.getElementById("pending-ledger");
-  const autoNote = document.getElementById("pending-auto-note");
   const tbody = document.querySelector("#pending-table tbody");
   tbody.innerHTML = "";
   autoAcceptedPendingIds = [];
 
   updateEmptyState(rows.length > 0);
+  renderFileTotals(rows);
   if (rows.length === 0) {
-    updatePendingCountBadge(0);
+    updateImportKpis(0, 0, 0);
     section.classList.add("hidden");
     return;
   }
@@ -69,20 +117,10 @@ async function loadPending() {
     reviewRows.push(row);
   });
 
-  // The badge counts what's actually in the table below it (rows still
-  // needing a manual look), not every pending row — those two numbers
-  // differ whenever some rows were confident enough to auto-accept, and
-  // conflating them made it look like bookings were missing from the list.
-  updatePendingCountBadge(reviewRows.length);
-
-  if (autoAcceptedPendingIds.length > 0) {
-    autoNote.textContent =
-      `${rows.length} Buchung(en) importiert: ${autoAcceptedPendingIds.length} mit hoher Konfidenz automatisch ` +
-      `zugeteilt, ${reviewRows.length} zur Prüfung unten.`;
-    autoNote.classList.remove("hidden");
-  } else {
-    autoNote.classList.add("hidden");
-  }
+  // These three numbers are the single source of truth for "how much is
+  // there to do" — the table below only ever shows reviewRows, so the KPI
+  // and the table can never again disagree about what's left to check.
+  updateImportKpis(rows.length, autoAcceptedPendingIds.length, reviewRows.length);
 
   ledger.classList.toggle("hidden", reviewRows.length === 0);
 

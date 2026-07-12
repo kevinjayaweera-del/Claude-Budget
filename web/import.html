@@ -20,24 +20,47 @@
   <div class="page">
 
     <header class="app-header">
-      <div class="app-header-title-group">
-        <p class="app-title">Import</p>
-        <span id="pending-count-badge" class="pending-count-badge hidden">
-          <span id="pending-count-value" class="pending-count-value">0</span>
-          <span class="pending-count-label">Buchungen zu prüfen</span>
-        </span>
-      </div>
+      <p class="app-title">Import</p>
       <button id="scan-btn" class="btn btn-primary" type="button">Neue Dateien importieren</button>
     </header>
 
+    <div id="import-kpis" class="kpi-grid hidden">
+      <div class="kpi-card">
+        <p class="kpi-label">Total importiert</p>
+        <p class="kpi-value tabular" id="kpi-total-imported">0</p>
+      </div>
+      <div class="kpi-card">
+        <p class="kpi-label">Automatisch zugeordnet</p>
+        <p class="kpi-value tabular credit" id="kpi-auto-assigned">0</p>
+      </div>
+      <div class="kpi-card">
+        <p class="kpi-label">Manuell zu prüfen</p>
+        <p class="kpi-value tabular debit" id="kpi-needs-review">0</p>
+      </div>
+    </div>
+
     <p id="scan-status" class="scan-status hidden" role="status"></p>
+
+    <section id="file-totals-section" class="hidden">
+      <div class="section-head">
+        <p class="section-title">Importierte Dateien</p>
+        <span class="section-note">Zum Abgleich mit den Total-Beträgen auf den Kontoauszügen</span>
+      </div>
+      <div class="ledger">
+        <table id="file-totals-table">
+          <thead>
+            <tr><th>Datei</th><th class="num">Buchungen</th><th class="num">Belastungen</th><th class="num">Gutschriften</th><th class="num">Netto</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
 
     <section id="pending-section" class="hidden">
       <div class="section-head">
         <p class="section-title">Zu prüfende Buchungen</p>
       </div>
       <p class="review-note">Bitte Kategorie, Betrag und Datum prüfen, bevor du den Import bestätigst.</p>
-      <p id="pending-auto-note" class="review-note hidden"></p>
       <div id="pending-ledger" class="ledger">
         <table id="pending-table">
           <thead>
