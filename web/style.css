@@ -31,6 +31,9 @@
   --cat-sparen-anlegen: #4f8f6b;
   --cat-lohn-einkommen: #3f7d4f;
   --cat-kreditkarten-ausgleich: #7d7266;
+  --cat-auto: #3d6b8c;
+  --cat-hobby: #b0567a;
+  --cat-steuern: #7a6a3d;
 
   /* Chart series palette — used for non-category series (income/expense/
      net, forecast, comparison periods) where a category color doesn't

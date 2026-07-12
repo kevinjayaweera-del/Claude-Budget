@@ -86,7 +86,7 @@ def test_default_category_rules_prefer_merchant_over_generic_twint_keyword(tmp_p
         ).fetchone()["name"]
 
     assert category_name("Belastung TWINT: SBB MOBILE BERN") == "Transport"
-    assert category_name("Belastung TWINT: PARKINGPAY-TWINT SCHLIEREN") == "Transport"
+    assert category_name("Belastung TWINT: PARKINGPAY-TWINT SCHLIEREN") == "Auto"
     assert category_name("Belastung TWINT: GALAXUS MOBILE ZURICH") == "Shopping"
     assert category_name("Belastung TWINT: BABY-WALZ AG ST. GALLEN") == "Shopping"
     assert category_name("Gutschrift TWINT: SCHWARTZ, PATRICK +41764535887") == "Privatüberweisungen"
@@ -142,7 +142,7 @@ def test_default_category_rules_recognize_patterns_mined_from_real_statements(tm
     assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Sabsins Thai Take-Away 0450 Auftrags-Nr.X") == "Restaurants/Ausgang"
     assert category_name("PIZZAFALCONE,BONSTETTEN") == "Restaurants/Ausgang"
     # Transport
-    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Shell Birmensdorf 0890 Auftrags-Nr.X") == "Transport"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Shell Birmensdorf 0890 Auftrags-Nr.X") == "Auto"
     assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Dott scooter ride Auftrags-Nr.X") == "Transport"
     # Reisen
     assert category_name("SWISSINTLAIRLINES,FRANKFURTAM") == "Reisen"
@@ -179,7 +179,7 @@ def test_default_category_rules_recognize_patterns_mined_from_real_statements(tm
     # issue as the "bäckerei"/"backerei" pair above.
     assert category_name("Gutschrift Auftraggeber: OKK Kranken- und Unfallvers., Bahnhofstrasse Auftrags-Nr.X") == "Versicherungen"
     # Abos
-    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, NAVIGRAPH 00000 Auftrags-Nr.X") == "Abos"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, NAVIGRAPH 00000 Auftrags-Nr.X") == "Hobby"
     # Privatüberweisungen
     assert category_name("Gutschrift Auftraggeber: Kevin Jayaweera, Chilegässli 12d, 8904 Aesch Auftrags-Nr.X") == "Privatüberweisungen"
     conn.close()
@@ -229,7 +229,7 @@ def test_default_category_rules_recognize_third_mining_pass_patterns(tmp_path):
     assert category_name("Riverty fuer Amazon, Guetersloherstrasse 123, 33145 Verl, DE") == "Shopping"
     assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, AMAZON.DE* Z888F2FY4 Auftrags-Nr.X") == "Shopping"
     # Freizeit
-    assert category_name("SP INIBUILDS , LONDON , Vereinigtes Koenigreich") == "Freizeit"
+    assert category_name("SP INIBUILDS , LONDON , Vereinigtes Koenigreich") == "Hobby"
     assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Stockhornbahn AG 0376 Auftrags-Nr.X") == "Freizeit"
     # Truncated form actually seen on a real statement (PDF column width cut
     # off "...bahnen" to "...bahn") — the shortened "bergbah" keyword must
@@ -245,7 +245,53 @@ def test_default_category_rules_recognize_third_mining_pass_patterns(tmp_path):
     assert category_name("Belastung Dauerauftrag: Fabienne Jayaweera, Chilegaessli 12d, 8904 Auftrags-Nr.X") == "Privatüberweisungen"
     # Sonstiges
     assert category_name("Belastung Mobile Banking: SERAFE AG, Summelenweg 91, 8808 Pfaeffikon SZ Auftrags-Nr.X") == "Sonstiges"
-    assert category_name("Belastung Mobile Banking: Strassenverkehrsamt Kanton Zuerich Auftrags-Nr.X") == "Sonstiges"
+    # Auto (fourth pass: split out of Transport/Sonstiges — see
+    # test_default_category_rules_split_auto_hobby_steuern_from_their_origin_categories below)
+    assert category_name("Belastung Mobile Banking: Strassenverkehrsamt Kanton Zuerich Auftrags-Nr.X") == "Auto"
+    conn.close()
+
+
+def test_default_category_rules_split_auto_hobby_steuern_from_their_origin_categories(tmp_path):
+    # Fourth pass: three new categories (Auto, Hobby, Steuern), each split
+    # out of an existing broader one on the same reasoning as the earlier
+    # Freizeit/Abos split for subscriptions vs. one-off leisure spending —
+    # "how much do I spend on my car" and "how much do I spend on tax"
+    # answer different budget questions than "transport in general" and
+    # "everything uncategorizable", even though every individual keyword
+    # already matched correctly before this split, just under a coarser
+    # category. Also guards test_default_category_keyword_groups_flatten_
+    # into_default_category_rules's duplicate-keyword check indirectly: a
+    # keyword accidentally left in both its old and new group would fail
+    # that test instead of this one.
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        return conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()["name"]
+
+    # Auto — split out of Transport (fuel, parking, tolls, leasing) and
+    # Sonstiges (vehicle registration/road tax); a new generic repair-shop
+    # keyword.
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Socar Zuerich Auftrags-Nr.X") == "Auto"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Amag Leasing AG Auftrags-Nr.X") == "Auto"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Garage Heis 0774 San Carlo Auftrags-Nr.X") == "Auto"
+    # Transport still recognizes public/shared mobility — unaffected by the
+    # Auto split.
+    assert category_name("Belastung TWINT: SBB MOBILE BERN") == "Transport"
+    assert category_name("Belastung TWINT: BOLT.EU ZUERICH") == "Transport"
+    # Hobby — split out of Freizeit (gaming, flight-sim addon purchases)
+    # and Abos (the flight-sim subscriptions those addons are bought for).
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Steamgames Zuerich Auftrags-Nr.X") == "Hobby"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Playstation Network Auftrags-Nr.X") == "Hobby"
+    assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 7369, SAYINTENTIONS.AI Auftrags-Nr.X") == "Hobby"
+    # Abos still recognizes non-hobby subscriptions — unaffected by the
+    # Hobby split.
+    assert category_name("Belastung eBill: Salt Mobile SA, Avenue de Malley 2, 1008 Prilly Auftrags-Nr.X") == "Abos"
+    # Steuern — split out of Sonstiges.
+    assert category_name("Belastung Mobile Banking: Steuerbezug Kanton Zuerich Auftrags-Nr.X") == "Steuern"
     conn.close()
 
 
@@ -332,11 +378,11 @@ def test_default_category_rules_group_similar_merchants_under_one_category(tmp_p
     assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Wal*Cafe Betschart 0000") == "Restaurants/Ausgang"
     assert category_name("Belastung TWINT: UBER EATS ZUERICH") == "Restaurants/Ausgang"
     assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Legend Doener Zuerich") == "Restaurants/Ausgang"
-    # Transport
-    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Avia Tankstelle Affoltern") == "Transport"
-    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Agrola Bern") == "Transport"
-    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, EKZ Sihlcity Parkhaus Ta") == "Transport"
-    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Carwash Affoltern") == "Transport"
+    # Auto (fourth pass moved gas stations/parking/carwash out of Transport)
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Avia Tankstelle Affoltern") == "Auto"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Agrola Bern") == "Auto"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, EKZ Sihlcity Parkhaus Ta") == "Auto"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Carwash Affoltern") == "Auto"
     # Miete/Wohnen
     assert category_name("Belastung Dauerauftrag: Otto Markwalder, Muster 3, 8000 Zuerich") == "Miete/Wohnen"
     # Versicherungen
@@ -406,10 +452,11 @@ def test_default_category_rules_recognize_second_mining_pass(tmp_path):
     # Transport — "taxi" is now a generic catch-all instead of one keyword
     # per taxi company.
     assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Taxi Neuwagen Bern") == "Transport"
-    assert category_name("100000008892954 Pedaggi A , Assago , Italien") == "Transport"
-    assert category_name("SHOP.ASFINAG.AT,WIEN") == "Transport"
-    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Parkdepot GmbH 0000") == "Transport"
     assert category_name("DOTTSCOOTERRIDE,ZUERICH") == "Transport"
+    # Auto (fourth pass moved highway tolls/parking-garage out of Transport)
+    assert category_name("100000008892954 Pedaggi A , Assago , Italien") == "Auto"
+    assert category_name("SHOP.ASFINAG.AT,WIEN") == "Auto"
+    assert category_name("Einkauf ZKB Visa Debit Card Nr. xxxx 7369, Parkdepot GmbH 0000") == "Auto"
     # Reisen
     assert category_name("LUFTHANSA 2202244494353 , BASEL") == "Reisen"
     assert category_name("RENTALCARS.COM , LONDON , VEREINIGTES KOENIGREI") == "Reisen"

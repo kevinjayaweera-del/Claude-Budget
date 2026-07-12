@@ -3,15 +3,25 @@ let allTags = [];
 
 const CATEGORY_COLORS = {
   "Lebensmittel": "var(--cat-lebensmittel)",
-  "Miete/Wohnen": "var(--cat-miete-wohnen)",
-  "Freizeit": "var(--cat-freizeit)",
+  "Restaurants/Ausgang": "var(--cat-restaurants-ausgang)",
   "Transport": "var(--cat-transport)",
+  "Reisen": "var(--cat-reisen)",
+  "Miete/Wohnen": "var(--cat-miete-wohnen)",
   "Versicherungen": "var(--cat-versicherungen)",
   "Gesundheit": "var(--cat-gesundheit)",
   "Shopping": "var(--cat-shopping)",
   "Abos": "var(--cat-abos)",
+  "Freizeit": "var(--cat-freizeit)",
+  "Bargeldbezug": "var(--cat-bargeldbezug)",
+  "Privatüberweisungen": "var(--cat-privatuberweisungen)",
+  "Sparen/Anlegen": "var(--cat-sparen-anlegen)",
+  "Lohn/Einkommen": "var(--cat-lohn-einkommen)",
   "Sonstiges": "var(--cat-sonstiges)",
+  "Kreditkarten-Ausgleich": "var(--cat-kreditkarten-ausgleich)",
   "Unkategorisiert": "var(--cat-unkategorisiert)",
+  "Auto": "var(--cat-auto)",
+  "Hobby": "var(--cat-hobby)",
+  "Steuern": "var(--cat-steuern)",
 };
 const MONTH_LABELS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 

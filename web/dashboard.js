@@ -19,6 +19,9 @@ const CATEGORY_COLORS = {
   "Sonstiges": "var(--cat-sonstiges)",
   "Kreditkarten-Ausgleich": "var(--cat-kreditkarten-ausgleich)",
   "Unkategorisiert": "var(--cat-unkategorisiert)",
+  "Auto": "var(--cat-auto)",
+  "Hobby": "var(--cat-hobby)",
+  "Steuern": "var(--cat-steuern)",
 };
 const MONTH_LABELS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 

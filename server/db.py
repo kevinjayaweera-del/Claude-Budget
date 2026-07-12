@@ -118,10 +118,11 @@ CATEGORIES_EXCLUDED_FROM_TOTALS = {"Kreditkarten-Ausgleich"}
 # analysis. Goal: the first real import needs as little manual
 # categorization as possible.
 DEFAULT_CATEGORIES = [
-    "Lebensmittel", "Restaurants/Ausgang", "Transport", "Reisen",
+    "Lebensmittel", "Restaurants/Ausgang", "Transport", "Auto", "Reisen",
     "Miete/Wohnen", "Versicherungen", "Gesundheit", "Shopping", "Abos",
-    "Freizeit", "Bargeldbezug", "Privatüberweisungen", "Sparen/Anlegen",
-    "Lohn/Einkommen", "Sonstiges", "Kreditkarten-Ausgleich", "Unkategorisiert",
+    "Freizeit", "Hobby", "Bargeldbezug", "Privatüberweisungen",
+    "Sparen/Anlegen", "Lohn/Einkommen", "Steuern", "Sonstiges",
+    "Kreditkarten-Ausgleich", "Unkategorisiert",
 ]
 
 # Grouped by category so maintenance means "find the category, add a
@@ -232,28 +233,50 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # across both the ZKB and Swisscard statements.
         "marche take away", "marcos",
     ],
+    # Getting around WITHOUT owning/driving a personal car — public transit,
+    # taxis, and shared micro-mobility rentals. See "Auto" below for the
+    # complementary "operating your own car" category (fuel, parking,
+    # tolls, leasing, maintenance) — split out in the fourth pass, since
+    # the two are meaningfully different budget questions even though both
+    # are "transport" in the broadest sense.
     "Transport": [
-        "sbb", "sbb mobile", "tankstell", "parkingpay", "taxifahrt",
-        "ubr* pending",
+        "sbb", "sbb mobile", "taxifahrt", "ubr* pending",
         # Generic ride/refund fallback — shorter than "* eats"/"uber eats"
         # above, so a food delivery line still wins Restaurants/Ausgang;
         # this only catches plain Uber rides and refunds like
         # "Rückerstattung ... UBER 00000 AMSTERDAM".
         "uber",
-        # Gas station brands, parking, and e-scooter/ride-share apps, mined
-        # from real statements — none of these are covered by the generic
-        # "tankstell"/"uber" keywords above.
-        "shell", "socar", "avia", "agrola", "dott scooter", "bolt.",
-        "amag leasing", "parkhaus", "carwash",
+        # E-scooter/ride-share apps, mined from real statements.
+        "dott scooter", "bolt.",
         # Cornercard's comma-joined format glues this one too — same issue
         # as "pizzafalcone"/"swissintlairlines" above.
         "dottscooterride",
         # Second real-data mining pass: "taxi" generalizes past the
         # existing "taxifahrt" — a taxi company's own name (e.g. "Taxi
-        # Asmat") doesn't contain that word at all. "pedaggi" (Italian) and
-        # "asfinag" (Austrian) are foreign highway-toll charges;
-        # "parkdepot" is a parking-garage operator.
-        "taxi", "pedaggi", "asfinag", "parkdepot",
+        # Asmat") doesn't contain that word at all.
+        "taxi",
+    ],
+    # Costs of owning/operating Kevin's own car — fuel, parking, tolls,
+    # leasing, registration/road tax, and repairs. Split out of "Transport"
+    # (fourth pass) so gas/parking spending can be tracked separately from
+    # train tickets and taxi rides, which answer a different budget
+    # question ("how much do I spend getting around without my car").
+    "Auto": [
+        # Gas station brands and parking, mined from real statements.
+        "tankstell", "parkingpay", "shell", "socar", "avia", "agrola",
+        "parkhaus", "carwash",
+        # Car leasing/dealer (AMAG is Switzerland's largest car importer),
+        # highway tolls (Italian "pedaggi", Austrian "asfinag" — charged
+        # when driving Kevin's own car abroad, unlike public-transit fares
+        # above), and a parking-garage operator.
+        "amag leasing", "pedaggi", "asfinag", "parkdepot",
+        # Fourth pass: the cantonal road-traffic office (vehicle
+        # registration/road tax, moved here from the generic "Sonstiges"
+        # administrative-fee bucket — it's specifically about owning a
+        # car, not a general government fee) and a generic repair-shop
+        # keyword ("Garage" reliably means a car workshop in Swiss usage,
+        # not a building attached to a house).
+        "strassenverkehrsamt", "garage",
     ],
     "Reisen": [
         "swiss intl air lines",
@@ -362,8 +385,8 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         "amazon",
     ],
     "Abos": [
-        "spotify", "netflix", "apple.com/bill", "sayintentions",
-        "salt mobile", "navigraph",
+        "spotify", "netflix", "apple.com/bill",
+        "salt mobile",
         # digitec Galaxus's own subscription product — distinct from the
         # plain "digitec galaxus"/"galaxus mobile" one-off purchases above
         # (Shopping).
@@ -374,23 +397,37 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # Third real-data mining pass: common software subscriptions.
         "adobe", "microsoft",
     ],
+    # General leisure/social activities — day trips, wellness, entertainment
+    # venues. See "Hobby" below for the complementary "an ongoing personal
+    # pursuit with its own gear/subscriptions" category (gaming, flight
+    # simulation) — split out in the fourth pass, on the same reasoning as
+    # Transport/Auto: these answer different budget questions even though
+    # both are "leisure spending" in the broadest sense.
     "Freizeit": [
-        "steamgames", "coiffure", "playstation network", "sanapark",
+        "coiffure", "sanapark",
         # Shortened from "bergbahnen" (plural, generic) to "bergbah" — the
         # PDF's own column width truncates longer merchant names, and a real
         # statement line cut it to "...Bergbah" (missing "nen"), which the
         # longer keyword never matched.
         "bergbah",
-        # Third real-data mining pass: a flight-simulator addon store
-        # (confirmed via web search — iniBuilds, consistent with the
-        # existing "sayintentions"/"navigraph" flight-sim subscriptions
-        # under Abos, but this was a one-off addon purchase, not a
-        # subscription), a named mountain railway and a lake ferry (both
-        # recur, and aren't caught by the generic "bergbah" above since
-        # they're not phrased as "...Bergbahn"), cinema chains, and a
-        # recurring yoga-studio membership.
-        "spinibuilds", "inibuilds", "stockhornbahn", "zurichsee-fahre",
-        "arena cinemas", "cinema 8", "deinyogaweg",
+        # Third real-data mining pass: a named mountain railway and a lake
+        # ferry (both recur, and aren't caught by the generic "bergbah"
+        # above since they're not phrased as "...Bergbahn"), cinema chains,
+        # and a recurring yoga-studio membership.
+        "stockhornbahn", "zurichsee-fahre", "arena cinemas", "cinema 8",
+        "deinyogaweg",
+    ],
+    # A specific ongoing pursuit with its own recurring subscriptions
+    # and/or one-off gear purchases — gaming and flight simulation so far.
+    # Fourth pass: moved out of Freizeit (steamgames, playstation network,
+    # the flight-sim addon store spinibuilds/inibuilds) and Abos
+    # (sayintentions/navigraph, the flight-sim subscriptions those addons
+    # are bought for) once a dedicated category existed for them, rather
+    # than splitting the same hobby's spending across two unrelated
+    # categories by whether a given purchase happens to be recurring.
+    "Hobby": [
+        "steamgames", "playstation network", "spinibuilds", "inibuilds",
+        "sayintentions", "navigraph",
     ],
     "Bargeldbezug": [
         "bezug zkb visa debit card",
@@ -436,10 +473,11 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
     "Sonstiges": [
         # Unclear small vendors, kept out of real spending categories.
         "ubs - zahlungen div", "corporate benefits", "marko switzerland",
-        # Cantonal tax withdrawal and generic bank transaction fees — no
-        # dedicated category for either, and both are clearly not everyday
-        # spending.
-        "steuerbezug", "zahlungsverkehrspreise",
+        # Generic bank transaction fees — no dedicated category, and
+        # clearly not everyday spending. (Cantonal tax withdrawal used to
+        # live here too — moved to the new "Steuern" category, fourth
+        # pass.)
+        "zahlungsverkehrspreise",
         # Government/administrative offices — not personal spending, but
         # not a transfer either.
         "post ch", "bevölkerungsamt",
@@ -457,11 +495,19 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         "echst.net", "nvg zentrum",
         # Third real-data mining pass: SERAFE (confirmed via web search —
         # the mandatory Swiss radio/TV reception fee collector, the
-        # replacement for the old Billag) and the cantonal road-traffic
-        # office (vehicle registration/road tax, recurs twice) — both
-        # administrative fees, matching "steuerbezug"/"bevölkerungsamt"
-        # above rather than any spending category.
-        "serafe", "strassenverkehrsamt",
+        # replacement for the old Billag). (The cantonal road-traffic
+        # office found in the same pass moved straight to the new "Auto"
+        # category, fourth pass, instead of landing here first — it's
+        # specifically about owning a car, not a general government fee.)
+        "serafe",
+    ],
+    # Fourth pass: cantonal/federal tax obligations, split out of the
+    # generic "Sonstiges" bucket now that there's a dedicated home for
+    # them — distinct from "zahlungsverkehrspreise" (a bank fee) and
+    # "steuerbezug" specifically means the tax authority withdrawing money
+    # already owed, not a purchase or transfer.
+    "Steuern": [
+        "steuerbezug",
     ],
     "Lohn/Einkommen": [
         # Any "Gutschrift Salär: <employer>" line, regardless of employer
@@ -596,6 +642,41 @@ def init_db(db_path):
         "WHERE keyword = 'saldovortrag' AND category_id = ?",
         (kreditkarten_ausgleich_id, sonstiges_id),
     )
+    # Fourth pass: introduced Auto (split out of Transport/Sonstiges), Hobby
+    # (split out of Freizeit/Abos), and Steuern (split out of Sonstiges) —
+    # same "already seeded under an old category" situation as ihre
+    # zahlung/saldovortrag above, but for enough keywords that a loop is
+    # more maintainable than one UPDATE per keyword. Each entry only names
+    # the OLD category a keyword used to live in; its new category is
+    # looked up from DEFAULT_CATEGORY_KEYWORD_GROUPS itself (via
+    # DEFAULT_CATEGORY_RULES), so this list can't drift out of sync with
+    # where a keyword actually lives now.
+    _keyword_to_new_category = dict(DEFAULT_CATEGORY_RULES)
+    _fourth_pass_retargets = [
+        ("tankstell", "Transport"), ("parkingpay", "Transport"),
+        ("shell", "Transport"), ("socar", "Transport"), ("avia", "Transport"),
+        ("agrola", "Transport"), ("amag leasing", "Transport"),
+        ("parkhaus", "Transport"), ("carwash", "Transport"),
+        ("pedaggi", "Transport"), ("asfinag", "Transport"),
+        ("parkdepot", "Transport"), ("strassenverkehrsamt", "Sonstiges"),
+        ("steamgames", "Freizeit"), ("playstation network", "Freizeit"),
+        ("spinibuilds", "Freizeit"), ("inibuilds", "Freizeit"),
+        ("sayintentions", "Abos"), ("navigraph", "Abos"),
+        ("steuerbezug", "Sonstiges"),
+    ]
+    for keyword, old_category_name in _fourth_pass_retargets:
+        old_category_id = conn.execute(
+            "SELECT id FROM categories WHERE name = ?", (old_category_name,)
+        ).fetchone()["id"]
+        new_category_id = conn.execute(
+            "SELECT id FROM categories WHERE name = ?",
+            (_keyword_to_new_category[keyword],),
+        ).fetchone()["id"]
+        conn.execute(
+            "UPDATE category_rules SET category_id = ? "
+            "WHERE keyword = ? AND category_id = ?",
+            (new_category_id, keyword, old_category_id),
+        )
     _backfill_accounts(conn)
     conn.commit()
     return conn
