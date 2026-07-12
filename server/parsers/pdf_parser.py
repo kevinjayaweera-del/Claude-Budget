@@ -13,13 +13,19 @@ AMOUNT_RE = re.compile(r"([+-]?\d{1,3}(?:['’]?\d{3})*[.,]\d{2})\s*$")
 
 # Real credit-card statements (Swisscard/Cornercard) parsed via this fallback
 # carry no per-line sign at all — every listed amount, purchase or payment
-# alike, is a bare positive number. An unsigned amount therefore defaults to
-# a debit (expense) here; the cardholder's own payment toward the balance
-# ("Ihre Zahlung – Besten Dank") is the one exception, detected by keyword —
-# the same "ihre zahlung" signal the categorizer already relies on (see
-# DEFAULT_CATEGORY_RULES in server/db.py). An explicit "+"/"-" sign, if a
-# statement format ever includes one, always overrides this default.
-_PAYMENT_KEYWORDS = ("zahlung",)
+# alike, is a bare positive number. An unsigned amount always defaults to a
+# debit (expense) here, including the cardholder's own bill payment
+# ("Ihre Zahlung – Besten Dank" / "IHREZAHLUNG-BESTENDANK"): on the card's
+# own statement that line is a Gutschrift (it reduces the balance owed), but
+# it represents real money Kevin sent FROM his checking account, never money
+# he received — storing it positive made it render as income in the ledger,
+# even though the matching "ihre zahlung" categorizer rule (see
+# DEFAULT_CATEGORY_RULES in server/db.py) already excludes it from every
+# total via Kreditkarten-Ausgleich. The corresponding ZKB-side debit that
+# actually settles the card is already negative, so this keeps both halves
+# of the same real-world payment on the same side of zero. An explicit
+# "+"/"-" sign, if a statement format ever includes one, still overrides
+# this default (see the refund case below).
 
 # "Stand Ihres Cashbacks per Rechnungsdatum 11.12.2025 CHF 81.81" — a running
 # cashback-balance summary printed near the end of every Swisscard
@@ -134,10 +140,7 @@ def _parse_line(line):
         # this line is netted in as a credit, not counted as a second debit.
         amount_cents = abs(_amount_to_cents(raw_amount))
     else:
-        amount_cents = _amount_to_cents(raw_amount)
-        is_payment = any(keyword in description.lower() for keyword in _PAYMENT_KEYWORDS)
-        if not is_payment:
-            amount_cents = -amount_cents
+        amount_cents = -_amount_to_cents(raw_amount)
 
     return {
         "date": _to_iso_date(date_match.group(1)),

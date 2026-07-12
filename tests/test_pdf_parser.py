@@ -71,16 +71,20 @@ def test_parse_line_defaults_unsigned_amount_to_debit():
     }
 
 
-def test_parse_line_treats_zahlung_as_credit():
+def test_parse_line_treats_zahlung_as_a_debit_like_any_other_unsigned_line():
     # "Ihre Zahlung – Besten Dank" is the cardholder's own payment toward the
-    # card balance, printed with the same unsigned format as a purchase — it
-    # must be detected by keyword (matching the "ihre zahlung" categorization
-    # rule) and treated as a credit, not a debit.
+    # card balance, printed with the same unsigned format as a purchase. An
+    # earlier version treated it as a credit (positive), matching the card's
+    # own Gutschrift-side bookkeeping — but that made it render as income in
+    # the ledger, even though it's real money Kevin sent out, not received.
+    # It's still tagged "Kreditkarten-Ausgleich" (see the "ihre zahlung"
+    # categorization rule) and excluded from every total either way; only
+    # the sign — and therefore how it displays — has changed.
     result = _parse_line("29.05.2026 IHRE ZAHLUNG-BESTEN DANK 148.45")
     assert result == {
         "date": "2026-05-29",
         "description": "IHRE ZAHLUNG-BESTEN DANK",
-        "amount_cents": 14845,
+        "amount_cents": -14845,
         "currency": "CHF",
     }
 
@@ -142,7 +146,7 @@ def test_parse_pdf_extracts_transactions_from_real_pdf(tmp_path):
     assert rows == [
         {"date": "2026-03-01", "description": "Migros Zuerich", "amount_cents": -4590, "currency": "CHF"},
         {"date": "2026-03-03", "description": "Spotify Stockholm", "amount_cents": -2250, "currency": "CHF"},
-        {"date": "2026-03-05", "description": "Ihre Zahlung-Besten Dank", "amount_cents": 520000, "currency": "CHF"},
+        {"date": "2026-03-05", "description": "Ihre Zahlung-Besten Dank", "amount_cents": -520000, "currency": "CHF"},
     ]
 
 
