@@ -6,12 +6,20 @@ auswerten. Läuft komplett lokal, keine Cloud-Anbindung.
 
 ## Starten (Windows, empfohlen)
 
-Doppelklick auf **`Budget-Tracker-starten.bat`** im Projektordner. Beim ersten
-Start wird automatisch eine virtuelle Umgebung angelegt und alle
-Abhängigkeiten installiert (dauert einen Moment); danach startet der Server
-und das Dashboard öffnet sich automatisch im Browser
-(http://127.0.0.1:5000/). Der Server läuft in einem separaten Fenster
-("Budget Tracker Server") — zum Beenden dieses Fenster einfach schliessen.
+Doppelklick auf das **"Budget Tracker"**-Icon auf dem Desktop. Der Server
+startet unsichtbar im Hintergrund (kein Konsolenfenster — läuft über
+`pythonw.exe`) und das Dashboard öffnet sich automatisch im Browser
+(http://127.0.0.1:5000/). Läuft der Server bereits (z.B. weil das Icon
+versehentlich zweimal angeklickt wurde), öffnet ein erneuter Klick einfach
+einen weiteren Browser-Tab statt eines zweiten Servers.
+
+Zum Beenden: Task-Manager öffnen, nach "Python" (bzw. `pythonw.exe`) suchen
+und den Prozess beenden — da kein Fenster sichtbar ist, gibt es sonst nichts
+zum Schliessen.
+
+Falls das Desktop-Icon fehlt oder neu erstellt werden soll:
+`venv\Scripts\pythonw.exe start_app.pyw` als Ziel einer neuen Verknüpfung
+verwenden, `app-icon.ico` als Icon.
 
 ## Einrichtung & Starten (manuell / andere Betriebssysteme)
 
