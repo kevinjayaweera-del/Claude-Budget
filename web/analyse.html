@@ -11,16 +11,16 @@
     })();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Budget Tracker — Budget</title>
+  <title>Budget Tracker — Analyse</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="app-shell">
-  <nav class="sidebar" id="sidebar" data-active="budget"></nav>
+  <nav class="sidebar" id="sidebar" data-active="analyse"></nav>
   <div class="page">
 
     <header class="app-header">
-      <p class="app-title">Budget</p>
+      <p class="app-title">Analyse</p>
       <div class="widget-picker">
         <button id="add-widget-btn" class="btn btn-ghost" type="button">+ Widget</button>
         <div id="widget-picker-menu" class="widget-picker-menu hidden"></div>
@@ -53,24 +53,51 @@
           Vorperiode vergleichen
         </label>
         <div class="toolbar-spacer"></div>
+        <button id="reset-filters-btn" class="btn btn-ghost hidden" type="button">Zurücksetzen</button>
+        <button id="filter-toggle-btn" class="btn btn-ghost filter-toggle active" type="button">
+          Filter
+          <span id="filter-toggle-badge" class="filter-badge hidden">0</span>
+          <span id="filter-toggle-caret" class="filter-toggle-caret">▴</span>
+        </button>
       </div>
-      <div class="dashboard-toolbar-row">
+      <div id="advanced-filters" class="dashboard-toolbar-row">
         <div class="field">
-          <label class="field-label" for="filter-account">Konto</label>
-          <select id="filter-account"><option value="">Alle Konten</option></select>
+          <label class="field-label">Kategorie</label>
+          <div id="filter-category" class="multiselect"></div>
         </div>
         <div class="field">
-          <label class="field-label" for="filter-category">Kategorie</label>
-          <select id="filter-category"><option value="">Alle Kategorien</option></select>
+          <label class="field-label">Konto</label>
+          <div id="filter-account" class="multiselect"></div>
         </div>
         <div class="field">
-          <label class="field-label" for="filter-tag">Tag</label>
-          <select id="filter-tag"><option value="">Alle Tags</option></select>
+          <label class="field-label">Tag</label>
+          <div id="filter-tag" class="multiselect"></div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="filter-type">Typ</label>
+          <select id="filter-type">
+            <option value="">Einnahmen &amp; Ausgaben</option>
+            <option value="income">Nur Einnahmen</option>
+            <option value="expense">Nur Ausgaben</option>
+          </select>
+        </div>
+        <div class="field amount">
+          <label class="field-label" for="filter-min-amount">Betrag von</label>
+          <input id="filter-min-amount" type="number" step="0.01" placeholder="-500">
+        </div>
+        <div class="field amount">
+          <label class="field-label" for="filter-max-amount">Betrag bis</label>
+          <input id="filter-max-amount" type="number" step="0.01" placeholder="0">
+        </div>
+        <div class="field search">
+          <label class="field-label" for="filter-search">Suche</label>
+          <input id="filter-search" type="text" placeholder="z.B. Migros">
         </div>
         <div class="toolbar-spacer"></div>
         <button id="apply-filters-btn" class="btn btn-primary" type="button">Anwenden</button>
       </div>
     </div>
+    <div id="active-filter-chips" class="filter-chips hidden"></div>
 
     <div id="dashboard-grid" class="dashboard-grid"></div>
 
@@ -89,6 +116,6 @@
 
   <script src="/sidebar.js"></script>
   <script src="/charts.js"></script>
-  <script src="/dashboard.js"></script>
+  <script src="/analyse.js"></script>
 </body>
 </html>

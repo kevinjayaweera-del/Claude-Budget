@@ -470,7 +470,9 @@ def test_default_category_rules_recognize_second_mining_pass(tmp_path):
     assert category_name("Online-Einkauf ZKB Visa Debit Card Nr. xxxx 5770, SP EHRENKIND 74523") == "Shopping"
     # Abos
     assert category_name("WHOOP , WHOOP.COM , VEREINIGTE STAATEN") == "Abos"
-    assert category_name("ONLYFANS.COM,LONDON") == "Abos"
+    # "onlyfans" moved to the hidden "Versteckt" category — fifth pass, see
+    # test_default_category_rules_treat_onlyfans_as_hidden.
+    assert category_name("ONLYFANS.COM,LONDON") == "Versteckt"
     # Sonstiges
     assert category_name("Rundung") == "Sonstiges"
     assert category_name("Jahresbeitrag") == "Sonstiges"
@@ -1011,4 +1013,276 @@ def test_reset_db_restores_default_settings(tmp_path):
         "SELECT value FROM settings WHERE key = 'auto_categorize_enabled'"
     ).fetchone()["value"]
     assert value == "true"
+
+
+def test_versteckt_category_is_hidden(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+
+    row = conn.execute(
+        "SELECT is_hidden FROM categories WHERE name = 'Versteckt'"
+    ).fetchone()
+    assert row["is_hidden"] == 1
+    conn.close()
+
+
+def test_other_categories_are_not_hidden(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+
+    row = conn.execute(
+        "SELECT is_hidden FROM categories WHERE name = 'Abos'"
+    ).fetchone()
+    assert row["is_hidden"] == 0
+    conn.close()
+
+
+def test_default_category_rules_treat_onlyfans_as_hidden(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    category_id, _, _ = categorizer.predict("OnlyFans.com Payment")
+    name = conn.execute("SELECT name FROM categories WHERE id = ?", (category_id,)).fetchone()["name"]
+    assert name == "Versteckt"
+    conn.close()
+
+
+def test_init_db_migrates_onlyfans_rule_away_from_abos(tmp_path):
+    # A database created before this fix existed has "onlyfans" seeded under
+    # "Abos" — must be retargeted on the next init_db() call.
+    db_path = tmp_path / "test.db"
+    old_conn = init_db(db_path)
+    abos_id = old_conn.execute(
+        "SELECT id FROM categories WHERE name = 'Abos'"
+    ).fetchone()["id"]
+    old_conn.execute(
+        "UPDATE category_rules SET category_id = ? WHERE keyword = 'onlyfans'",
+        (abos_id,),
+    )
+    old_conn.commit()
+    old_conn.close()
+
+    conn = init_db(db_path)
+
+    row = conn.execute(
+        "SELECT c.name FROM category_rules r JOIN categories c ON r.category_id = c.id "
+        "WHERE r.keyword = 'onlyfans'"
+    ).fetchone()
+    assert row["name"] == "Versteckt"
+    conn.close()
+
+
+def test_init_db_retargets_already_confirmed_onlyfans_transactions(tmp_path):
+    # A transaction imported and confirmed before "Versteckt" existed sits
+    # under "Abos" — must move to "Versteckt" so it's actually hidden, not
+    # just newly-imported ones.
+    db_path = tmp_path / "test.db"
+    old_conn = init_db(db_path)
+    abos_id = old_conn.execute(
+        "SELECT id FROM categories WHERE name = 'Abos'"
+    ).fetchone()["id"]
+    old_conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, category_id, source, manually_corrected) "
+        "VALUES ('2026-03-01', 'OnlyFans.com Payment', -1999, 'CHF', ?, 'zkb', 0)",
+        (abos_id,),
+    )
+    old_conn.commit()
+    old_conn.close()
+
+    conn = init_db(db_path)
+
+    row = conn.execute(
+        "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id "
+        "WHERE t.description = 'OnlyFans.com Payment'"
+    ).fetchone()
+    assert row["name"] == "Versteckt"
+    conn.close()
+
+
+def test_init_db_does_not_retarget_manually_corrected_onlyfans_transaction(tmp_path):
+    # If Kevin deliberately re-categorized a matching transaction away from
+    # Abos himself, the migration must not override that manual choice.
+    db_path = tmp_path / "test.db"
+    old_conn = init_db(db_path)
+    abos_id = old_conn.execute(
+        "SELECT id FROM categories WHERE name = 'Abos'"
+    ).fetchone()["id"]
+    old_conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, category_id, source, manually_corrected) "
+        "VALUES ('2026-03-01', 'OnlyFans.com Payment', -1999, 'CHF', ?, 'zkb', 1)",
+        (abos_id,),
+    )
+    old_conn.commit()
+    old_conn.close()
+
+    conn = init_db(db_path)
+
+    row = conn.execute(
+        "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id "
+        "WHERE t.description = 'OnlyFans.com Payment'"
+    ).fetchone()
+    assert row["name"] == "Abos"
+    conn.close()
+    conn.close()
+
+
+def test_default_category_rules_recognize_sixth_pass_generic_and_multilingual_terms(tmp_path):
+    # Sixth pass: a broad, general-knowledge keyword expansion (well-known
+    # brands, synonyms, and DE/EN/FR/IT terms) rather than statement-mined
+    # ones — verifies representative entries across every touched category.
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        return conn.execute("SELECT name FROM categories WHERE id = ?", (category_id,)).fetchone()["name"]
+
+    # The reported bug: a plain "Parking" line, plus its common synonyms/
+    # multi-language variants, must resolve to Auto.
+    assert category_name("Parking Zuerich HB") == "Auto"
+    assert category_name("PARKHAUS Bahnhofplatz") == "Auto"
+    assert category_name("Parkplatz Dorfstrasse") == "Auto"
+    assert category_name("P+R Oerlikon") == "Auto"
+    assert category_name("Car Park Terminal 2") == "Auto"
+    assert category_name("Parcage Genève-Cornavin") == "Auto"
+    assert category_name("Parcheggio Stazione Lugano") == "Auto"
+    assert category_name("ESSO Tankstelle Bern") == "Auto"
+    assert category_name("Touring Club Suisse Mitgliedschaft") == "Auto"
+    # Lebensmittel
+    assert category_name("Manor Food Zuerich HB") == "Lebensmittel"
+    assert category_name("Landi Freiamt") == "Lebensmittel"
+    assert category_name("Otto's Filiale Bern") == "Lebensmittel"
+    # Restaurants/Ausgang, incl. multi-language
+    assert category_name("Boulangerie du Marche") == "Restaurants/Ausgang"
+    assert category_name("Trattoria Da Mario") == "Restaurants/Ausgang"
+    assert category_name("Hiltl Sihlpost") == "Restaurants/Ausgang"
+    assert category_name("Mit und ohne Kebab") == "Restaurants/Ausgang"
+    # Transport
+    assert category_name("PostAuto Schweiz AG") == "Transport"
+    assert category_name("FlixBus DE12345") == "Transport"
+    # Reisen — car rental is travel-related, distinct from Auto above
+    assert category_name("Ryanair DAC Dublin") == "Reisen"
+    assert category_name("Booking.com B.V.") == "Reisen"
+    assert category_name("Europcar Autovermietung") == "Reisen"
+    # Versicherungen, incl. multi-language fallback
+    assert category_name("CSS Kranken-Versicherung AG") == "Versicherungen"
+    assert category_name("Swica Krankenversicherung") == "Versicherungen"
+    assert category_name("Une Assurance Quelconque SA") == "Versicherungen"
+    # Gesundheit, incl. multi-language
+    assert category_name("Pharmacie Populaire Genève") == "Gesundheit"
+    assert category_name("Farmacia Centrale Lugano") == "Gesundheit"
+    assert category_name("Kantonsspital Aarau") == "Gesundheit"
+    # Shopping
+    assert category_name("Manor AG Basel") == "Shopping"
+    assert category_name("Globus Zuerich") == "Shopping"
+    assert category_name("Apple Store R159") == "Shopping"
+    # Abos — Amazon Prime must win over the bare "amazon" Shopping keyword
+    assert category_name("Amazon Prime DE") == "Abos"
+    assert category_name("Swisscom (Schweiz) AG") == "Abos"
+    assert category_name("Disney+ Subscription") == "Abos"
+    # Freizeit
+    assert category_name("Pathé Küchlin Basel") == "Freizeit"
+    assert category_name("Hallenbad Uitikon") == "Freizeit"
+    # Hobby
+    assert category_name("Epic Games Store") == "Hobby"
+    assert category_name("Xbox Game Pass") == "Hobby"
+    # Bargeldbezug
+    assert category_name("Bancomat Postomat") == "Bargeldbezug"
+    # Sparen/Anlegen
+    assert category_name("VIAC Vorsorge 3a") == "Sparen/Anlegen"
+    assert category_name("finpension AG") == "Sparen/Anlegen"
+    # Miete/Wohnen
+    assert category_name("Wincasa AG Zuerich") == "Miete/Wohnen"
+    # Lohn/Einkommen
+    assert category_name("Salaire de Mars") == "Lohn/Einkommen"
+    # Steuern
+    assert category_name("Steueramt Kanton Zuerich") == "Steuern"
+    # Privatüberweisungen
+    assert category_name("Virement en faveur de Jean Dupont") == "Privatüberweisungen"
+    conn.close()
+
+
+def test_default_category_rules_avoid_known_sixth_pass_collisions(tmp_path):
+    # Real-data regression check against Kevin's full transaction history
+    # after the sixth-pass keyword expansion caught these — each pairs a
+    # longer/more specific brand keyword against a generic catch-all that
+    # would otherwise misfile it (categorize() prefers the longest match).
+    conn = init_db(tmp_path / "test.db")
+    categorizer = RuleBasedCategorizer(conn)
+
+    def category_name(description):
+        category_id, _, _ = categorizer.predict(description)
+        row = conn.execute("SELECT name FROM categories WHERE id = ?", (category_id,)).fetchone()
+        return row["name"] if row else None
+
+    # "Coop City" (Shopping) is longer than bare "parking" (Auto) — without
+    # the "parking coop city" override in Auto, this misfiled as Shopping.
+    assert category_name("Parking Coop City Zug") == "Auto"
+    # "Coop Pronto" (Lebensmittel) is longer than "tankstell" (Auto) —
+    # without the "coop pronto tankstelle" override in Auto, a fuel
+    # purchase at a Coop-branded gas station misfiled as groceries.
+    assert category_name("Coop Pronto Tankstelle 0886") == "Auto"
+    # A bare "spital" keyword matched inside the unrelated English word
+    # "Hospitality" ("ho-SPITAL-ity") — must not categorize this as
+    # Gesundheit (falls through to Unkategorisiert instead).
+    assert category_name("Weisse Arena Hospitality") != "Gesundheit"
+    # "avec" (intended for the Swiss convenience-store chain) is also the
+    # plain French word "with" and matched an unrelated company name — the
+    # keyword was dropped entirely rather than left as a false-positive risk.
+    assert category_name("Fais Avec GmbH") != "Lebensmittel"
+    conn.close()
+
+
+def test_fix_location_poisoned_rules_deletes_rule_and_recategorizes_affected_transactions(tmp_path):
+    # Simulates a real incident: an earlier correction on some Zürich
+    # restaurant taught "zuerich" (the longest word in that description) as
+    # a Restaurants/Ausgang keyword, long before STOPWORDS was hardened
+    # against place names. Since it's longer than the real "salaer" keyword,
+    # it silently outranks it on every salary credit whose employer address
+    # is in Zürich too.
+    db_path = tmp_path / "test.db"
+    old_conn = init_db(db_path)
+    restaurants_id = old_conn.execute(
+        "SELECT id FROM categories WHERE name = 'Restaurants/Ausgang'"
+    ).fetchone()["id"]
+    old_conn.execute(
+        "INSERT INTO category_rules (keyword, category_id, match_count, correction_count, is_seeded, created_at) "
+        "VALUES ('zuerich', ?, 92, 0, 0, datetime('now'))",
+        (restaurants_id,),
+    )
+    old_conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, category_id, source, manually_corrected) "
+        "VALUES ('2025-12-16', 'Gutschrift Salaer: Kanton Zuerich, Walcheplatz 1, 8090 Zuerich, CH', "
+        "1633800, 'CHF', ?, 'zkb', 0)",
+        (restaurants_id,),
+    )
+    # A transaction Kevin has since manually corrected to Restaurants/Ausgang
+    # himself (for whatever real reason) must NOT be touched by the cleanup.
+    old_conn.execute(
+        "INSERT INTO transactions (date, description, amount_cents, currency, category_id, source, manually_corrected) "
+        "VALUES ('2025-11-01', 'Irgendein Zuerich Laden', -2000, 'CHF', ?, 'zkb', 1)",
+        (restaurants_id,),
+    )
+    old_conn.commit()
+    old_conn.close()
+
+    conn = init_db(db_path)
+
+    assert conn.execute("SELECT id FROM category_rules WHERE keyword = 'zuerich'").fetchone() is None
+    salary_row = conn.execute(
+        "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id "
+        "WHERE t.description LIKE 'Gutschrift Salaer%'"
+    ).fetchone()
+    assert salary_row["name"] == "Lohn/Einkommen"
+    manual_row = conn.execute(
+        "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id "
+        "WHERE t.description = 'Irgendein Zuerich Laden'"
+    ).fetchone()
+    assert manual_row["name"] == "Restaurants/Ausgang"
+    conn.close()
+
+
+def test_fix_location_poisoned_rules_is_idempotent(tmp_path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path).close()
+    conn = init_db(db_path)  # second call: no poisoned rules left, must be a no-op
+    assert conn.execute("SELECT COUNT(*) c FROM category_rules").fetchone()["c"] > 0
     conn.close()

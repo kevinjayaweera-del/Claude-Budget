@@ -171,3 +171,80 @@ def test_learn_upsert_resets_history_when_category_changes(tmp_path):
     assert row["match_count"] == 1
     assert row["correction_count"] == 0
     conn.close()
+
+
+def test_learn_skips_when_extracted_keyword_matches_exclude_keyword(tmp_path):
+    # Regression guard for a real bug: correcting a single "Migros Zürich"
+    # transaction away from Lebensmittel used to be able to instantly
+    # retarget the *entire* "migros" rule to the new category (since
+    # _extract_keyword() can land back on the very keyword that produced the
+    # now-corrected suggestion) — silently undoing the correction_count
+    # penalty confirm_import() applies and breaking every future Migros
+    # purchase. exclude_keyword lets the caller name that keyword so learn()
+    # skips instead of stealing it.
+    conn = init_db(tmp_path / "test.db")
+    lebensmittel_id = _category_id(conn, "Lebensmittel")
+    sonstiges_id = _category_id(conn, "Sonstiges")
+    categorizer = RuleBasedCategorizer(conn)
+    migros_before = dict(conn.execute(
+        "SELECT category_id, match_count, correction_count FROM category_rules WHERE keyword = 'migros'"
+    ).fetchone())
+
+    categorizer.learn("Migros", sonstiges_id, was_correction=True, exclude_keyword="migros")
+
+    migros_after = dict(conn.execute(
+        "SELECT category_id, match_count, correction_count FROM category_rules WHERE keyword = 'migros'"
+    ).fetchone())
+    assert migros_after == migros_before
+    assert migros_after["category_id"] == lebensmittel_id
+    conn.close()
+
+
+def test_learn_still_learns_a_different_keyword_despite_exclude_keyword(tmp_path):
+    # exclude_keyword must only block the one specific keyword, not learning
+    # entirely — a correction that genuinely extracts a different word must
+    # still teach it normally.
+    conn = init_db(tmp_path / "test.db")
+    freizeit_id = _category_id(conn, "Freizeit")
+    categorizer = RuleBasedCategorizer(conn)
+
+    categorizer.learn("Kletterzentrum Adliswil", freizeit_id, was_correction=True, exclude_keyword="migros")
+
+    row = conn.execute(
+        "SELECT category_id FROM category_rules WHERE keyword = 'kletterzentrum'"
+    ).fetchone()
+    assert row is not None
+    assert row["category_id"] == freizeit_id
+    conn.close()
+
+
+def test_extract_keyword_never_learns_a_purely_numeric_token(tmp_path):
+    # Regression guard: a masked postal code or similar digit placeholder
+    # (e.g. "0000") must never become "the" keyword — found via a real-data
+    # audit where "00000" had been learned this way with 157 hits.
+    conn = init_db(tmp_path / "test.db")
+    freizeit_id = _category_id(conn, "Freizeit")
+    categorizer = RuleBasedCategorizer(conn)
+
+    categorizer.learn("Irgendein Laden 00000", freizeit_id)
+
+    assert conn.execute("SELECT id FROM category_rules WHERE keyword = '00000'").fetchone() is None
+    row = conn.execute("SELECT id FROM category_rules WHERE keyword = 'irgendein'").fetchone()
+    assert row is not None
+    conn.close()
+
+
+def test_extract_keyword_never_learns_a_city_or_country_name(tmp_path):
+    # Regression guard: a real-data audit found city/country-name fragments
+    # (e.g. "zuerich", from "Gutschrift Salär: Kanton Zürich, ...") had been
+    # learned as "keywords" this way, poisoning every future transaction
+    # whose address happens to be in that city — including salary credits
+    # and grocery purchases whose real merchant name was shorter.
+    conn = init_db(tmp_path / "test.db")
+    lohn_id = _category_id(conn, "Lohn/Einkommen")
+    categorizer = RuleBasedCategorizer(conn)
+
+    categorizer.learn("Gutschrift Salaer: Kanton Zuerich, Walcheplatz 1, 8090 Zuerich, CH", lohn_id)
+
+    assert conn.execute("SELECT id FROM category_rules WHERE keyword = 'zuerich'").fetchone() is None
+    conn.close()

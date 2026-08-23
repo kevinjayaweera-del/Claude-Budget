@@ -14,7 +14,7 @@ const CATEGORY_COLORS = {
   "Freizeit": "var(--cat-freizeit)",
   "Bargeldbezug": "var(--cat-bargeldbezug)",
   "Privatüberweisungen": "var(--cat-privatuberweisungen)",
-  "Sparen/Anlegen": "var(--cat-sparen-anlegen)",
+  "Sparen": "var(--cat-sparen-anlegen)",
   "Lohn/Einkommen": "var(--cat-lohn-einkommen)",
   "Sonstiges": "var(--cat-sonstiges)",
   "Kreditkarten-Ausgleich": "var(--cat-kreditkarten-ausgleich)",
@@ -22,6 +22,13 @@ const CATEGORY_COLORS = {
   "Auto": "var(--cat-auto)",
   "Hobby": "var(--cat-hobby)",
   "Steuern": "var(--cat-steuern)",
+  "Haustier": "var(--cat-haustier)",
+  "Anlegen": "var(--cat-anlegen)",
+  "Vorsorge": "var(--cat-vorsorge)",
+  "Kleidung": "var(--cat-kleidung)",
+  "Elektronik": "var(--cat-elektronik)",
+  "Körperpflege": "var(--cat-koerperpflege)",
+  "Sport/Fahrrad": "var(--cat-sport-fahrrad)",
 };
 const MONTH_LABELS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 
@@ -136,14 +143,70 @@ function computeWindow(granularity) {
   return { start: isoDate(start), end: isoDate(end) };
 }
 
+// Budgets are stored as a monthly figure (monthly_limit_cents), but the
+// budget-vs-actual widgets need to compare against whatever window
+// state.start..state.end currently covers — a fixed "always this calendar
+// month" comparison (an earlier version of this) never changed when the
+// toolbar's own period picker did, which read as "the numbers don't
+// update". Scaling the monthly limit by the selected window's length
+// (relative to an average 30.44-day month) keeps the comparison
+// meaningful for any period while still visibly responding to it: a
+// 3-month "Quartal" window compares against ~3x the monthly limit, a
+// single "Tag" window against ~1/30 of it, etc.
+const AVG_DAYS_PER_MONTH = 30.436875;
+function periodScaleFactor() {
+  const days = Math.round((new Date(state.end) - new Date(state.start)) / (24 * 3600 * 1000)) + 1;
+  return Math.max(days, 1) / AVG_DAYS_PER_MONTH;
+}
+
 function computePreviousWindow(start, end) {
   const s = new Date(start);
   const e = new Date(end);
   const spanMs = e - s;
   const prevEnd = new Date(s);
-  prevEnd.setDate(prevEnd.getDate() - 1);
+  prevEnd.setUTCDate(prevEnd.getUTCDate() - 1); // UTC setter — see advancePeriod() for why (DST safety)
   const prevStart = new Date(prevEnd.getTime() - spanMs);
   return { start: isoDate(prevStart), end: isoDate(prevEnd) };
+}
+
+// summaryParams() collapses "custom" to "month" before hitting the backend
+// (see below) — anywhere we need to walk/step actual period keys, we must
+// use the same collapsed granularity or periodKeyFor()/advancePeriod() will
+// disagree with what the server actually grouped by.
+function effectiveGranularity() {
+  return state.granularity === "custom" ? "month" : state.granularity;
+}
+
+// /api/summary groups by period via pandas groupby, so periods with zero
+// transactions are simply absent from the response (sparse), not zero-filled.
+// Chart code needs a dense, gap-filled list of period keys spanning the
+// requested window so the x-axis doesn't silently compress past empty
+// periods and so index-based alignment (see mergePreviousForCompare) has
+// something safe to fall back to.
+function generatePeriodRange(start, end, granularity) {
+  const startKey = periodKeyFor(start, granularity);
+  const endKey = periodKeyFor(end, granularity);
+  const keys = [];
+  let cursor = startKey;
+  for (let i = 0; i < 5000 && cursor <= endKey; i++) {
+    keys.push(cursor);
+    if (cursor === endKey) break;
+    cursor = advancePeriod(cursor, granularity, 1);
+  }
+  return keys;
+}
+
+// Maps a period in the CURRENT window to its counterpart in the previous
+// window by shifting dates, not array position — mirrors the exact shift
+// computePreviousWindow() applies to the whole window. Index-based zipping
+// (the previous approach) silently misaligns whenever either window has a
+// gap period, which filtering by account/category/tag makes common.
+function previousPeriodKeyFor(periodKey, granularity) {
+  const { start } = periodToDateRange(periodKey, granularity);
+  const spanMs = new Date(state.end) - new Date(state.start);
+  const shiftMs = spanMs + 24 * 3600 * 1000;
+  const shifted = new Date(new Date(start).getTime() - shiftMs);
+  return periodKeyFor(isoDate(shifted), granularity);
 }
 
 // ---------- state ----------
@@ -153,9 +216,13 @@ const state = {
   start: null,
   end: null,
   compare: false,
-  accountId: "",
-  categoryId: "",
-  tagId: "",
+  accountIds: [],
+  categoryIds: [],
+  tagIds: [],
+  type: "",
+  minAmount: "",
+  maxAmount: "",
+  search: "",
   categories: [],
   accounts: [],
   tags: [],
@@ -163,6 +230,7 @@ const state = {
   summary: null,
   prevSummary: null,
   transactions: [],
+  recurring: [],
 };
 
 const LAYOUT_KEY = "budget_dashboard_layout_v2";
@@ -174,16 +242,21 @@ const WIDGET_DEFS = [
   { id: "kpi-expense", title: "Ausgaben", kind: "kpi", size: "sm" },
   { id: "kpi-net", title: "Cashflow", kind: "kpi", size: "sm" },
   { id: "kpi-savings-rate", title: "Sparquote", kind: "kpi", size: "sm" },
-  { id: "kpi-budget-remaining", title: "Restbudget (Monat)", kind: "kpi", size: "sm" },
+  { id: "kpi-budget-remaining", title: "Restbudget", kind: "kpi", size: "sm" },
   { id: "kpi-avg-day", title: "Ø Ausgaben/Tag", kind: "kpi", size: "sm" },
   { id: "chart-income-expense", title: "Einnahmen vs. Ausgaben", kind: "chart", size: "lg", render: renderIncomeExpenseChart },
   { id: "chart-cashflow", title: "Cashflow & Prognose", kind: "chart", size: "lg", render: renderCashflowChart },
   { id: "chart-category-donut", title: "Ausgaben nach Kategorie", kind: "chart", size: "md", render: renderCategoryDonut },
   { id: "list-top-categories", title: "Top-Kategorien", kind: "list", size: "md", render: renderTopCategoriesList },
+  { id: "chart-tag-breakdown", title: "Ausgaben nach Tag", kind: "chart", size: "md", render: renderTagBreakdownChart },
   { id: "chart-budget-actual", title: "Budget vs. Ist", kind: "chart", size: "lg", render: renderBudgetActualChart },
   { id: "chart-category-trend", title: "Kategorien-Trend", kind: "chart", size: "lg", render: renderCategoryTrendChart },
   { id: "chart-savings-rate", title: "Sparquoten-Verlauf", kind: "chart", size: "md", render: renderSavingsRateChart },
   { id: "chart-cumulative", title: "Kumulierter Cashflow", kind: "chart", size: "md", render: renderCumulativeChart },
+  { id: "list-top-merchants", title: "Top-Händler", kind: "list", size: "md", render: renderTopMerchantsList },
+  { id: "list-recurring", title: "Wiederkehrende Zahlungen", kind: "list", size: "md", render: renderRecurringList },
+  { id: "list-largest-transactions", title: "Größte Einzelausgaben", kind: "list", size: "md", render: renderLargestTransactionsList },
+  { id: "list-category-movers", title: "Größte Veränderungen", kind: "list", size: "md", render: renderCategoryMoversList },
   { id: "budgets-manage", title: "Budgets pro Kategorie", kind: "custom", size: "full", render: renderBudgetsManageWidget },
 ];
 const WIDGET_BY_ID = Object.fromEntries(WIDGET_DEFS.map((w) => [w.id, w]));
@@ -253,10 +326,16 @@ function renderKpiWidget(id, bodyEl) {
     if (state.budgets.length === 0) {
       bodyEl.innerHTML = `<p class="widget-kpi-value tabular">—</p>`;
     } else {
+      // state.summary — the same period-filtered data every other widget
+      // uses — with each monthly_limit_cents scaled to match the selected
+      // window (see periodScaleFactor), so this responds to the toolbar's
+      // period picker like everything else instead of silently staying
+      // fixed to the current calendar month.
+      const scale = periodScaleFactor();
       const spentByCategory = {};
       s.by_category.forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
       const remaining = state.budgets.reduce(
-        (sum, b) => sum + (b.monthly_limit_cents - (spentByCategory[b.category_name] || 0)), 0
+        (sum, b) => sum + (b.monthly_limit_cents * scale - (spentByCategory[b.category_name] || 0)), 0
       );
       bodyEl.innerHTML = `<p class="widget-kpi-value tabular ${remaining >= 0 ? "credit" : "debit"}">${remaining >= 0 ? "" : "−"}${formatMoney(Math.abs(remaining))}</p>`;
     }
@@ -270,19 +349,28 @@ function renderKpiWidget(id, bodyEl) {
 // ---------- widget renderers: charts ----------
 
 function buildPeriodSeriesData() {
-  const rows = state.summary ? state.summary.by_period : [];
-  return rows.map((r) => ({
-    x: r.period,
-    income: r.income_cents,
-    expense: r.expense_cents,
-    net: r.net_cents,
-  }));
+  if (!state.summary || !state.start || !state.end) return [];
+  const granularity = effectiveGranularity();
+  const byKey = new Map(state.summary.by_period.map((r) => [r.period, r]));
+  return generatePeriodRange(state.start, state.end, granularity).map((p) => {
+    const r = byKey.get(p);
+    return {
+      x: p,
+      income: r ? r.income_cents : 0,
+      expense: r ? r.expense_cents : 0,
+      net: r ? r.net_cents : 0,
+    };
+  });
 }
 
 function mergePreviousForCompare(data, key, label) {
   if (!state.compare || !state.prevSummary) return { data, series: [] };
-  const prevRows = state.prevSummary.by_period;
-  const merged = data.map((d, i) => ({ ...d, [`prev_${key}`]: prevRows[i] ? prevRows[i][`${key}_cents`] : 0 }));
+  const granularity = effectiveGranularity();
+  const prevByKey = new Map(state.prevSummary.by_period.map((r) => [r.period, r]));
+  const merged = data.map((d) => {
+    const prevRow = prevByKey.get(previousPeriodKeyFor(d.x, granularity));
+    return { ...d, [`prev_${key}`]: prevRow ? prevRow[`${key}_cents`] : 0 };
+  });
   return {
     data: merged,
     series: [{ key: `prev_${key}`, label: `${label} (Vorperiode)`, color: "var(--ink-faint)" }],
@@ -290,8 +378,9 @@ function mergePreviousForCompare(data, key, label) {
 }
 
 function openPeriodDrilldown(seriesKey, index, point) {
-  const { start, end } = periodToDateRange(point.x, state.granularity);
-  openDrilldown({ start, end }, `Buchungen: ${formatPeriodLabel(point.x, state.granularity)}`);
+  const granularity = effectiveGranularity();
+  const { start, end } = periodToDateRange(point.x, granularity);
+  openDrilldown({ start, end }, `Buchungen: ${formatPeriodLabel(point.x, granularity)}`);
 }
 
 function renderIncomeExpenseChart(bodyEl) {
@@ -310,19 +399,23 @@ function renderIncomeExpenseChart(bodyEl) {
     data: compareInfo.data,
     series: [...series, ...compareInfo.series],
     formatValue: formatMoney,
-    formatX: (x) => formatPeriodLabel(x, state.granularity),
+    formatX: (x) => formatPeriodLabel(x, effectiveGranularity()),
     zoomable: true,
     onPointClick: openPeriodDrilldown,
   });
 }
 
 function mergePreviousForCompareAbs(data) {
-  const prevRows = state.prevSummary.by_period;
-  const merged = data.map((d, i) => ({
-    ...d,
-    prev_income: prevRows[i] ? prevRows[i].income_cents : 0,
-    prev_expense: prevRows[i] ? Math.abs(prevRows[i].expense_cents) : 0,
-  }));
+  const granularity = effectiveGranularity();
+  const prevByKey = new Map(state.prevSummary.by_period.map((r) => [r.period, r]));
+  const merged = data.map((d) => {
+    const prevRow = prevByKey.get(previousPeriodKeyFor(d.x, granularity));
+    return {
+      ...d,
+      prev_income: prevRow ? prevRow.income_cents : 0,
+      prev_expense: prevRow ? Math.abs(prevRow.expense_cents) : 0,
+    };
+  });
   return {
     data: merged,
     series: [
@@ -358,11 +451,16 @@ function forecastNextPeriods(data, count) {
 function advancePeriod(period, granularity, steps) {
   const { start } = periodToDateRange(period, granularity);
   const d = new Date(start);
-  if (granularity === "day") d.setDate(d.getDate() + steps);
-  else if (granularity === "week") d.setDate(d.getDate() + steps * 7);
-  else if (granularity === "month") d.setMonth(d.getMonth() + steps);
-  else if (granularity === "quarter") d.setMonth(d.getMonth() + steps * 3);
-  else if (granularity === "year") d.setFullYear(d.getFullYear() + steps);
+  // UTC setters only: `d` is a UTC-midnight instant (parsed from a plain
+  // YYYY-MM-DD string). Local setters (setMonth/setDate) would apply Europe/
+  // Zurich's DST offset, which can roll the result back onto the previous
+  // day/month right around a DST transition (e.g. late March), making this
+  // function silently fail to advance and looping callers spin forever.
+  if (granularity === "day") d.setUTCDate(d.getUTCDate() + steps);
+  else if (granularity === "week") d.setUTCDate(d.getUTCDate() + steps * 7);
+  else if (granularity === "month") d.setUTCMonth(d.getUTCMonth() + steps);
+  else if (granularity === "quarter") d.setUTCMonth(d.getUTCMonth() + steps * 3);
+  else if (granularity === "year") d.setUTCFullYear(d.getUTCFullYear() + steps);
   return periodKeyFor(isoDate(d), granularity);
 }
 
@@ -374,7 +472,7 @@ function renderCashflowChart(bodyEl) {
   const forecastValues = forecastNextPeriods(data, 3);
   const lastPeriod = data[data.length - 1].x;
   const forecastPoints = forecastValues.map((v, i) => ({
-    x: advancePeriod(lastPeriod, state.granularity, i + 1),
+    x: advancePeriod(lastPeriod, effectiveGranularity(), i + 1),
     net: v,
   }));
   const fullData = [...data, ...forecastPoints];
@@ -384,7 +482,7 @@ function renderCashflowChart(bodyEl) {
     data: fullData,
     series: [{ key: "net", label: "Cashflow", color: "var(--series-1)" }],
     formatValue: formatMoney,
-    formatX: (x) => formatPeriodLabel(x, state.granularity),
+    formatX: (x) => formatPeriodLabel(x, effectiveGranularity()),
     zoomable: true,
     forecastFromIndex,
     onPointClick: (seriesKey, index, point) => {
@@ -398,9 +496,17 @@ function renderCategoryDonut(bodyEl) {
   const rows = state.summary ? state.summary.by_category : [];
   if (rows.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Keine Ausgaben im gewählten Zeitraum.</p>'; return; }
   const data = rows.map((c) => ({ x: c.category, value: c.amount_cents, color: categoryColor(c.category) }));
+  // A donut's height IS its diameter (_drawPie draws a square of
+  // Math.min(width, height)) — charts.js's general cartesian-chart height
+  // formula is far too short for that, so this widget explicitly asks for
+  // something close to its own width instead, capped so it doesn't dwarf
+  // the "Top-Kategorien" widget next to it.
+  const width = bodyEl.clientWidth || 600;
   renderChart(bodyEl, {
     type: "donut",
     data,
+    width,
+    height: Math.min(width * 0.85, 420),
     series: [{ key: "value" }],
     formatValue: formatMoney,
     showLegend: false,
@@ -434,13 +540,48 @@ function openCategoryDrilldown(categoryName) {
   );
 }
 
+// Groups expenses by tag (e.g. "Ferien Berlin" from a trip tagged via the
+// Übersicht page's Reise-Erkennung tool) — a transaction with several tags
+// contributes its full amount to each one, matching what filtering the
+// ledger by that single tag would show.
+function renderTagBreakdownChart(bodyEl) {
+  const rows = state.summary ? state.summary.by_tag : [];
+  if (rows.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Noch keine getaggten Buchungen im gewählten Zeitraum.</p>'; return; }
+  const sorted = [...rows].sort((a, b) => b.amount_cents - a.amount_cents);
+  const data = sorted.map((t) => ({ x: t.tag, amount: t.amount_cents }));
+  renderChart(bodyEl, {
+    type: "bar",
+    data,
+    series: [{ key: "amount", label: "Ausgaben", color: "var(--series-4)" }],
+    formatValue: formatMoney,
+    formatX: (x) => x,
+    showLegend: false,
+    onPointClick: (seriesKey, index, point) => openTagDrilldown(point.x),
+  });
+}
+
+function openTagDrilldown(tagName) {
+  const tag = state.tags.find((t) => t.name === tagName);
+  openDrilldown(
+    { start: state.start, end: state.end, tag_id: tag ? tag.id : "" },
+    `Buchungen: ${tagName}`
+  );
+}
+
 function renderBudgetActualChart(bodyEl) {
   if (state.budgets.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Noch keine Budgets festgelegt.</p>'; return; }
+  // state.summary (the same period-filtered data every other widget uses)
+  // with each monthly_limit_cents scaled to the selected window (see
+  // periodScaleFactor) — "Ist" is this window's actual spend, "Budget" is
+  // the proportional allowance for that same window, so both bars respond
+  // to the toolbar's period picker instead of "Budget" silently staying
+  // fixed to one calendar month regardless of what's selected.
+  const scale = periodScaleFactor();
   const spentByCategory = {};
   (state.summary ? state.summary.by_category : []).forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
   const data = state.budgets.map((b) => ({
     x: b.category_name,
-    budget: b.monthly_limit_cents,
+    budget: Math.round(b.monthly_limit_cents * scale),
     actual: spentByCategory[b.category_name] || 0,
   }));
   renderChart(bodyEl, {
@@ -452,7 +593,10 @@ function renderBudgetActualChart(bodyEl) {
     ],
     formatValue: formatMoney,
     formatX: (x) => x,
-    onPointClick: (seriesKey, index, point) => openCategoryDrilldown(point.x),
+    onPointClick: (seriesKey, index, point) => {
+      const cat = state.categories.find((c) => c.name === point.x);
+      openDrilldown({ start: state.start, end: state.end, category_id: cat ? cat.id : "" }, `Buchungen: ${point.x}`);
+    },
   });
 }
 
@@ -471,21 +615,27 @@ function renderCategoryTrendChart(bodyEl) {
     .map(([name]) => name);
   const topSet = new Set(topCategories);
 
+  const granularity = effectiveGranularity();
   const byPeriod = {};
   state.transactions.forEach((t) => {
     if (t.excluded_from_totals || t.amount_cents >= 0) return;
-    const period = periodKeyFor(t.date, state.granularity);
+    const period = periodKeyFor(t.date, granularity);
     const cat = t.category_name || "Unkategorisiert";
     const bucket = topSet.has(cat) ? cat : "Andere";
     if (!byPeriod[period]) byPeriod[period] = {};
     byPeriod[period][bucket] = (byPeriod[period][bucket] || 0) + Math.abs(t.amount_cents);
   });
 
-  const periods = Object.keys(byPeriod).sort();
+  // Dense-fill: state.transactions only contains periods with matching
+  // activity, so without this a zero-activity period silently disappears
+  // from the x-axis instead of showing as zero, compressing the timeline.
+  const periods = state.start && state.end
+    ? generatePeriodRange(state.start, state.end, granularity)
+    : Object.keys(byPeriod).sort();
   const seriesKeys = [...topCategories, "Andere"];
-  const data = periods.map((p) => ({ x: p, ...byPeriod[p] }));
+  const data = periods.map((p) => ({ x: p, ...(byPeriod[p] || {}) }));
   const series = seriesKeys
-    .filter((k) => periods.some((p) => byPeriod[p][k]))
+    .filter((k) => periods.some((p) => byPeriod[p] && byPeriod[p][k]))
     .map((k, i) => ({ key: k, label: k, color: k === "Andere" ? "var(--ink-faint)" : categoryColor(k) }));
 
   if (series.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Keine Ausgaben im gewählten Zeitraum.</p>'; return; }
@@ -496,57 +646,205 @@ function renderCategoryTrendChart(bodyEl) {
     series,
     stacked: true,
     formatValue: formatMoney,
-    formatX: (x) => formatPeriodLabel(x, state.granularity),
+    formatX: (x) => formatPeriodLabel(x, granularity),
     zoomable: true,
     onPointClick: (seriesKey, index, point) => {
-      const { start, end } = periodToDateRange(point.x, state.granularity);
+      const { start, end } = periodToDateRange(point.x, granularity);
       const cat = state.categories.find((c) => c.name === seriesKey);
       openDrilldown(
         { start, end, category_id: cat ? cat.id : "" },
-        `${seriesKey}: ${formatPeriodLabel(point.x, state.granularity)}`
+        `${seriesKey}: ${formatPeriodLabel(point.x, granularity)}`
       );
     },
   });
 }
 
 function renderSavingsRateChart(bodyEl) {
-  const rows = state.summary ? state.summary.by_period : [];
+  const rows = buildPeriodSeriesData();
   if (rows.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Keine Daten im gewählten Zeitraum.</p>'; return; }
   const data = rows.map((r) => ({
-    x: r.period,
-    rate: r.income_cents > 0 ? Math.round(((r.income_cents + r.expense_cents) / r.income_cents) * 10000) : 0,
+    x: r.x,
+    rate: r.income > 0 ? Math.round(((r.income + r.expense) / r.income) * 10000) : 0,
   }));
   renderChart(bodyEl, {
     type: "line",
     data,
     series: [{ key: "rate", label: "Sparquote", color: "var(--series-2)" }],
     formatValue: (v) => `${(v / 100).toFixed(1)}%`,
-    formatX: (x) => formatPeriodLabel(x, state.granularity),
+    formatX: (x) => formatPeriodLabel(x, effectiveGranularity()),
     onPointClick: openPeriodDrilldown,
   });
 }
 
 function renderCumulativeChart(bodyEl) {
-  const rows = state.summary ? state.summary.by_period : [];
+  const rows = buildPeriodSeriesData();
   if (rows.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Keine Daten im gewählten Zeitraum.</p>'; return; }
   let running = 0;
   const data = rows.map((r) => {
-    running += r.net_cents;
-    return { x: r.period, cumulative: running };
+    running += r.net;
+    return { x: r.x, cumulative: running };
   });
   renderChart(bodyEl, {
     type: "area",
     data,
     series: [{ key: "cumulative", label: "Kumulierter Cashflow", color: "var(--series-3)" }],
     formatValue: formatMoney,
-    formatX: (x) => formatPeriodLabel(x, state.granularity),
+    formatX: (x) => formatPeriodLabel(x, effectiveGranularity()),
     onPointClick: openPeriodDrilldown,
+  });
+}
+
+// ---------- widget renderers: insight lists (merchants, recurring, largest, movers) ----------
+
+// Shared row markup with the four-column .top-cat-row grid (rank / dot /
+// name / amount) used elsewhere on the page — a blank rank cell keeps the
+// grid columns aligned for widgets (like movers) that don't have a
+// meaningful rank of their own.
+function insightRow({ rank = "", dot, name, meta, amount, amountClass = "", dataAttrs = {} }) {
+  const attrs = Object.entries({ name, ...dataAttrs }).map(([k, v]) => `data-${k}="${escapeHtml(v)}"`).join(" ");
+  return `
+    <div class="top-cat-row" ${attrs}>
+      <span class="top-cat-rank">${rank}</span>
+      <span class="cat-dot" style="background: ${dot}"></span>
+      <span class="top-cat-name" title="${escapeHtml(meta ? `${name} — ${meta}` : name)}">${escapeHtml(name)}${meta ? ` <span class="insight-meta">${escapeHtml(meta)}</span>` : ""}</span>
+      <span class="top-cat-amount tabular ${amountClass}">${amount}</span>
+    </div>
+  `;
+}
+
+function renderTopMerchantsList(bodyEl) {
+  const rows = state.summary ? state.summary.by_merchant : [];
+  const sorted = rows.slice(0, 6);
+  if (sorted.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Keine Ausgaben im gewählten Zeitraum.</p>'; return; }
+  bodyEl.innerHTML = sorted.map((m, i) => insightRow({
+    rank: i + 1,
+    dot: "var(--ink-faint)",
+    name: m.merchant,
+    meta: `${m.count}×`,
+    amount: formatMoney(m.amount_cents),
+    dataAttrs: { "merchant-key": m.merchant_key },
+  })).join("");
+  bodyEl.querySelectorAll(".top-cat-row").forEach((row) => {
+    row.style.cursor = "pointer";
+    row.addEventListener("click", () => {
+      openDrilldown(
+        { start: state.start, end: state.end, merchant_key: row.dataset.merchantKey },
+        `Buchungen: ${row.dataset.name}`
+      );
+    });
+  });
+}
+
+// state.recurring is loaded once per loadData() call but deliberately
+// ignores the toolbar's date-range filter (see loadRecurring) — a
+// subscription's cadence only shows up looking back several months, not
+// within whatever window "Woche"/"Monat"/etc. happens to be set to.
+function renderRecurringList(bodyEl) {
+  const rows = state.recurring || [];
+  if (rows.length === 0) {
+    bodyEl.innerHTML = '<p class="panel-empty">Keine wiederkehrenden Zahlungen erkannt (mind. 3 Monate in Folge, stabiler Betrag).</p>';
+    return;
+  }
+  const monthlyTotal = rows.reduce((sum, r) => sum + r.avg_amount_cents, 0);
+  const listHtml = rows.slice(0, 8).map((r, i) => insightRow({
+    rank: i + 1,
+    dot: categoryColor(r.category_name || "Sonstiges"),
+    name: r.merchant,
+    meta: `${r.distinct_months}× · zuletzt ${r.last_date}`,
+    amount: formatMoney(r.avg_amount_cents),
+    dataAttrs: { "merchant-key": r.merchant_key },
+  })).join("");
+  bodyEl.innerHTML = `<p class="insight-total">Ø ${formatMoney(monthlyTotal)} CHF/Monat in ${rows.length} erkannten Abos</p>${listHtml}`;
+  bodyEl.querySelectorAll(".top-cat-row").forEach((row) => {
+    row.style.cursor = "pointer";
+    row.addEventListener("click", () => {
+      openDrilldown({ merchant_key: row.dataset.merchantKey }, `Wiederkehrend: ${row.dataset.name}`);
+    });
+  });
+}
+
+function renderLargestTransactionsList(bodyEl) {
+  const rows = (state.transactions || []).filter((t) => !t.excluded_from_totals && t.amount_cents < 0);
+  const sorted = [...rows].sort((a, b) => a.amount_cents - b.amount_cents).slice(0, 6);
+  if (sorted.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Keine Ausgaben im gewählten Zeitraum.</p>'; return; }
+  bodyEl.innerHTML = sorted.map((t, i) => insightRow({
+    rank: i + 1,
+    dot: categoryColor(t.category_name || "Sonstiges"),
+    name: t.description,
+    meta: t.date,
+    amount: formatMoney(t.amount_cents),
+    amountClass: "debit",
+    dataAttrs: { "txn-id": t.id },
+  })).join("");
+  bodyEl.querySelectorAll(".top-cat-row").forEach((row) => {
+    row.style.cursor = "pointer";
+    row.addEventListener("click", () => {
+      const txn = sorted.find((t) => String(t.id) === row.dataset.txnId);
+      if (!txn) return;
+      openDrilldown({ start: txn.date, end: txn.date }, `Buchungen: ${formatPeriodLabel(txn.date, "day")}`);
+    });
+  });
+}
+
+// Compares the current period's by_category totals against the previous
+// period's (state.prevSummary — the same "Vorperiode vergleichen" data
+// every KPI badge already uses) rather than fetching anything new, so this
+// widget is only meaningful once that toggle is on.
+function renderCategoryMoversList(bodyEl) {
+  if (!state.compare || !state.prevSummary) {
+    bodyEl.innerHTML = '<p class="panel-empty">Aktiviere "Vorperiode vergleichen" im Filter, um Veränderungen zu sehen.</p>';
+    return;
+  }
+  const current = {};
+  (state.summary ? state.summary.by_category : []).forEach((c) => { current[c.category] = c.amount_cents; });
+  const previous = {};
+  (state.prevSummary ? state.prevSummary.by_category : []).forEach((c) => { previous[c.category] = c.amount_cents; });
+  const allNames = new Set([...Object.keys(current), ...Object.keys(previous)]);
+  const movers = [...allNames]
+    .map((name) => {
+      const cur = current[name] || 0;
+      const prev = previous[name] || 0;
+      return { name, delta: cur - prev, cur, prev };
+    })
+    .filter((m) => m.prev > 0 || m.cur > 0);
+  const increases = movers.filter((m) => m.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 3);
+  const decreases = movers.filter((m) => m.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 3);
+  if (increases.length === 0 && decreases.length === 0) {
+    bodyEl.innerHTML = '<p class="panel-empty">Keine Veränderungen gegenüber der Vorperiode.</p>';
+    return;
+  }
+  function moverRow(m, dir) {
+    const pct = m.prev > 0 ? Math.abs((m.delta / m.prev) * 100) : null;
+    return `
+      <div class="top-cat-row" data-category="${escapeHtml(m.name)}">
+        <span class="top-cat-rank"></span>
+        <span class="cat-dot" style="background: ${categoryColor(m.name)}"></span>
+        <span class="top-cat-name">${escapeHtml(m.name)}</span>
+        <span class="kpi-compare ${dir}">${dir === "up" ? "▲" : "▼"} ${formatMoney(Math.abs(m.delta))}${pct !== null ? ` (${pct.toFixed(0)}%)` : ""}</span>
+      </div>
+    `;
+  }
+  bodyEl.innerHTML = `
+    ${increases.length ? `<p class="insight-total">Stärkste Anstiege</p>${increases.map((m) => moverRow(m, "up")).join("")}` : ""}
+    ${decreases.length ? `<p class="insight-total">Stärkste Rückgänge</p>${decreases.map((m) => moverRow(m, "down")).join("")}` : ""}
+  `;
+  bodyEl.querySelectorAll(".top-cat-row").forEach((row) => {
+    row.style.cursor = "pointer";
+    row.addEventListener("click", () => openCategoryDrilldown(row.dataset.category));
   });
 }
 
 // ---------- budgets management widget (custom, non-chart) ----------
 
 function renderBudgetsManageWidget(bodyEl) {
+  // state.summary (the same period-filtered data every other widget uses)
+  // with each monthly_limit_cents scaled to the selected window (see
+  // periodScaleFactor), so "spent / limit" and the progress bar respond to
+  // the toolbar's period picker instead of always comparing against one
+  // calendar month no matter what's selected. The edit input below always
+  // shows/saves the true monthly figure (that's what's actually stored) —
+  // only the *comparison* shown here scales with the period.
+  const scale = periodScaleFactor();
   const spentByCategory = {};
   (state.summary ? state.summary.by_category : []).forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
 
@@ -554,20 +852,21 @@ function renderBudgetsManageWidget(bodyEl) {
     ? '<p class="panel-empty">Noch keine Budgets festgelegt. Füge unten eines hinzu.</p>'
     : state.budgets.map((b) => {
       const spent = spentByCategory[b.category_name] || 0;
-      const pct = b.monthly_limit_cents > 0 ? (spent / b.monthly_limit_cents) * 100 : 0;
+      const scaledLimit = b.monthly_limit_cents * scale;
+      const pct = scaledLimit > 0 ? (spent / scaledLimit) * 100 : 0;
       const level = pct >= 100 ? "over" : pct >= 75 ? "warn" : "ok";
       return `
         <div class="budget-row" data-category-id="${b.category_id}">
           <div class="budget-row-head">
             <span class="cat-dot" style="background: ${categoryColor(b.category_name)}"></span>
             <span class="budget-row-name">${escapeHtml(b.category_name)}</span>
-            <span class="budget-row-amounts tabular">${formatMoney(spent)} / ${formatMoney(b.monthly_limit_cents)} CHF</span>
+            <span class="budget-row-amounts tabular">${formatMoney(spent)} / ${formatMoney(scaledLimit)} CHF</span>
           </div>
           <div class="budget-track">
             <div class="budget-fill ${level}" style="width: ${Math.min(pct, 100)}%"></div>
           </div>
           <div class="budget-row-actions">
-            <input type="number" step="1" min="0" class="budget-limit-input" value="${Math.round(b.monthly_limit_cents / 100)}" data-field="limit">
+            <input type="number" step="1" min="0" class="budget-limit-input" value="${Math.round(b.monthly_limit_cents / 100)}" data-field="limit" title="Monatliches Budget in CHF">
             <button type="button" class="btn-ghost btn-small" data-action="update-budget">Speichern</button>
             <button type="button" class="btn-danger btn-small" data-action="delete-budget">Entfernen</button>
           </div>
@@ -640,9 +939,25 @@ async function openDrilldown(filters, title) {
   const params = new URLSearchParams();
   if (filters.start) params.set("start", filters.start);
   if (filters.end) params.set("end", filters.end);
+  // filters.category_id (set by the caller — e.g. a clicked donut slice or
+  // budget bar) deliberately overrides state.categoryIds rather than
+  // combining with it: drilling into one specific category should show
+  // that category regardless of what the global filter happens to be.
   if (filters.category_id) params.set("category_id", filters.category_id);
-  if (state.accountId) params.set("account_id", state.accountId);
-  if (state.tagId) params.set("tag_id", state.tagId);
+  else if (state.categoryIds.length) params.set("category_id", state.categoryIds.join(","));
+  if (state.accountIds.length) params.set("account_id", state.accountIds.join(","));
+  // Same override rule as category_id above — a clicked tag bar should show
+  // that tag regardless of the global tag filter.
+  if (filters.tag_id) params.set("tag_id", filters.tag_id);
+  else if (state.tagIds.length) params.set("tag_id", state.tagIds.join(","));
+  if (state.type) params.set("type", state.type);
+  if (state.minAmount) params.set("min_amount", state.minAmount);
+  if (state.maxAmount) params.set("max_amount", state.maxAmount);
+  if (state.search) params.set("q", state.search);
+  // Set by the Top-Händler/Wiederkehrende-Zahlungen widgets — narrows to
+  // exactly the merchant group a summary row aggregated (see _merchant_key
+  // in server/app.py). No global equivalent filter exists to override.
+  if (filters.merchant_key) params.set("merchant_key", filters.merchant_key);
 
   document.getElementById("drilldown-title").textContent = title;
   const body = document.getElementById("drilldown-body");
@@ -720,7 +1035,7 @@ function buildWidgetEl(id) {
       layout.sizes[id] = next;
       el.dataset.size = next;
       saveLayout();
-      def.render(el.querySelector(".widget-body"));
+      renderWidgetContent(id, el.querySelector(".widget-body"));
     });
   }
 
@@ -747,13 +1062,26 @@ function buildWidgetEl(id) {
     renderAllWidgets();
   });
 
-  const body = el.querySelector(".widget-body");
+  // Content is deliberately NOT rendered here — buildWidgetEl() only
+  // builds the DOM skeleton. The caller must append `el` to the document
+  // first, then call renderWidgetContent(), or a chart's width calculation
+  // (container.clientWidth inside charts.js's renderChart) silently reads
+  // 0 — a detached element has no layout box yet — and falls back to a
+  // fixed default width that doesn't match this widget's real,
+  // CSS-grid-computed size. That mismatch is exactly why charts used to
+  // render letterboxed (a fixed-aspect-ratio viewBox centered inside a
+  // much wider box, wasting ~30% of the width as blank margin either
+  // side) instead of filling the widget.
+  return el;
+}
+
+function renderWidgetContent(id, body) {
+  const def = WIDGET_BY_ID[id];
   if (def.kind === "kpi") {
     renderKpiWidget(id, body);
   } else if (def.render) {
     def.render(body);
   }
-  return el;
 }
 
 function renderAllWidgets() {
@@ -761,7 +1089,11 @@ function renderAllWidgets() {
   grid.innerHTML = "";
   layout.order
     .filter((id) => !layout.hidden.includes(id))
-    .forEach((id) => grid.appendChild(buildWidgetEl(id)));
+    .forEach((id) => {
+      const el = buildWidgetEl(id);
+      grid.appendChild(el);
+      renderWidgetContent(id, el.querySelector(".widget-body"));
+    });
   renderWidgetPicker();
 }
 
@@ -795,12 +1127,335 @@ document.addEventListener("click", (event) => {
   }
 });
 
+// ---------- multi-select filter control ----------
+// A dependency-free "N of M selected" dropdown: click opens a checkbox
+// panel (with a search box once there are enough options to need one),
+// closes on an outside click or Escape. Selection only lives in memory
+// until the caller reads getSelected() — nothing is applied until
+// "Anwenden" is pressed, matching every other filter field's existing
+// pick-then-apply behavior instead of firing a fetch per checkbox click.
+function createMultiSelect(container, { options, selected, allLabel, searchThreshold = 8 }) {
+  const selectedIds = new Set((selected || []).map(String));
+  let query = "";
+
+  function summaryText() {
+    if (selectedIds.size === 0) return allLabel;
+    if (selectedIds.size === 1) {
+      const opt = options.find((o) => String(o.id) === [...selectedIds][0]);
+      return opt ? opt.name : allLabel;
+    }
+    return `${selectedIds.size} ausgewählt`;
+  }
+
+  function updateTrigger() {
+    const trigger = container.querySelector(".multiselect-trigger");
+    if (!trigger) return;
+    trigger.querySelector("span").textContent = summaryText();
+    trigger.classList.toggle("active", selectedIds.size > 0);
+  }
+
+  function filteredOptions() {
+    if (!query) return options;
+    const q = query.toLowerCase();
+    return options.filter((o) => o.name.toLowerCase().includes(q));
+  }
+
+  function renderPanel() {
+    const panel = container.querySelector(".multiselect-panel");
+    if (!panel) return;
+    panel.querySelector(".multiselect-list").innerHTML = filteredOptions().map((o) => `
+      <label class="multiselect-option">
+        <input type="checkbox" value="${o.id}" ${selectedIds.has(String(o.id)) ? "checked" : ""}>
+        <span>${escapeHtml(o.name)}</span>
+      </label>
+    `).join("") || '<p class="multiselect-empty">Keine Treffer.</p>';
+    panel.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        if (cb.checked) selectedIds.add(cb.value); else selectedIds.delete(cb.value);
+        updateTrigger();
+      });
+    });
+  }
+
+  function open() {
+    document.querySelectorAll(".multiselect.open").forEach((el) => { if (el !== container) closeEl(el); });
+    container.classList.add("open");
+    container.querySelector(".multiselect-panel").classList.remove("hidden");
+    const search = container.querySelector(".multiselect-search");
+    if (search) search.focus();
+  }
+  function closeEl(el) {
+    el.classList.remove("open");
+    const panel = el.querySelector(".multiselect-panel");
+    if (panel) panel.classList.add("hidden");
+  }
+
+  container.innerHTML = `
+    <button type="button" class="multiselect-trigger ${selectedIds.size > 0 ? "active" : ""}">
+      <span>${escapeHtml(summaryText())}</span>
+      <span class="multiselect-caret">▾</span>
+    </button>
+    <div class="multiselect-panel hidden">
+      ${options.length > searchThreshold ? '<input type="text" class="multiselect-search" placeholder="Suchen…">' : ""}
+      <div class="multiselect-actions">
+        <button type="button" data-action="select-all">Alle</button>
+        <button type="button" data-action="select-none">Keine</button>
+      </div>
+      <div class="multiselect-list"></div>
+    </div>
+  `;
+
+  container.querySelector(".multiselect-trigger").addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (container.classList.contains("open")) closeEl(container); else open();
+  });
+  container.querySelector(".multiselect-panel").addEventListener("click", (event) => event.stopPropagation());
+  const search = container.querySelector(".multiselect-search");
+  if (search) {
+    search.addEventListener("input", (event) => { query = event.target.value; renderPanel(); });
+  }
+  container.querySelector('[data-action="select-all"]').addEventListener("click", () => {
+    filteredOptions().forEach((o) => selectedIds.add(String(o.id)));
+    renderPanel();
+    updateTrigger();
+  });
+  container.querySelector('[data-action="select-none"]').addEventListener("click", () => {
+    selectedIds.clear();
+    renderPanel();
+    updateTrigger();
+  });
+
+  renderPanel();
+
+  return {
+    getSelected: () => [...selectedIds],
+    setSelected: (ids) => {
+      selectedIds.clear();
+      (ids || []).forEach((id) => selectedIds.add(String(id)));
+      updateTrigger();
+      renderPanel();
+    },
+  };
+}
+
+document.addEventListener("click", (event) => {
+  document.querySelectorAll(".multiselect.open").forEach((el) => {
+    if (!el.contains(event.target)) {
+      el.classList.remove("open");
+      const panel = el.querySelector(".multiselect-panel");
+      if (panel) panel.classList.add("hidden");
+    }
+  });
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  document.querySelectorAll(".multiselect.open").forEach((el) => {
+    el.classList.remove("open");
+    const panel = el.querySelector(".multiselect-panel");
+    if (panel) panel.classList.add("hidden");
+  });
+});
+
 // ---------- toolbar / filters ----------
+
+let categoryMultiSelect = null;
+let accountMultiSelect = null;
+let tagMultiSelect = null;
+
+function initMultiSelects() {
+  categoryMultiSelect = createMultiSelect(document.getElementById("filter-category"), {
+    options: state.categories.map((c) => ({ id: c.id, name: c.name })),
+    selected: state.categoryIds,
+    allLabel: "Alle Kategorien",
+  });
+  accountMultiSelect = createMultiSelect(document.getElementById("filter-account"), {
+    options: state.accounts.map((a) => ({ id: a.id, name: a.name })),
+    selected: state.accountIds,
+    allLabel: "Alle Konten",
+  });
+  tagMultiSelect = createMultiSelect(document.getElementById("filter-tag"), {
+    options: state.tags.map((t) => ({ id: t.id, name: t.name })),
+    selected: state.tagIds,
+    allLabel: "Alle Tags",
+  });
+}
 
 function updateCustomFieldsVisibility() {
   const isCustom = state.granularity === "custom";
   document.getElementById("custom-start-field").classList.toggle("hidden", !isCustom);
   document.getElementById("custom-end-field").classList.toggle("hidden", !isCustom);
+}
+
+// ---------- advanced-filter panel collapse ----------
+
+const FILTERS_EXPANDED_KEY = "budget_dashboard_filters_expanded_v1";
+
+function setFiltersExpanded(expanded) {
+  document.getElementById("advanced-filters").classList.toggle("hidden", !expanded);
+  document.getElementById("filter-toggle-btn").classList.toggle("active", expanded);
+  document.getElementById("filter-toggle-caret").textContent = expanded ? "▴" : "▾";
+  localStorage.setItem(FILTERS_EXPANDED_KEY, expanded ? "1" : "0");
+}
+
+document.getElementById("filter-toggle-btn").addEventListener("click", () => {
+  const isExpanded = !document.getElementById("advanced-filters").classList.contains("hidden");
+  setFiltersExpanded(!isExpanded);
+});
+
+// ---------- active-filter badge + removable chips ----------
+
+// Mirrors renderFilterChips()'s grouping 1:1 (min/max amount is one chip,
+// not two) so the badge number always matches how many chips are shown.
+function activeFilterCount() {
+  return state.categoryIds.length + state.accountIds.length + state.tagIds.length
+    + (state.type ? 1 : 0) + (state.minAmount || state.maxAmount ? 1 : 0) + (state.search ? 1 : 0);
+}
+
+function updateFilterBadge() {
+  const count = activeFilterCount();
+  const badge = document.getElementById("filter-toggle-badge");
+  badge.textContent = count;
+  badge.classList.toggle("hidden", count === 0);
+  document.getElementById("reset-filters-btn").classList.toggle("hidden", count === 0);
+}
+
+function namesForIds(ids, list) {
+  return ids
+    .map((id) => { const item = list.find((x) => String(x.id) === String(id)); return item ? item.name : null; })
+    .filter(Boolean);
+}
+
+// Lets the user see (and undo) exactly what's narrowing the view without
+// opening the advanced-filter panel again — click a chip's × to drop just
+// that one filter and reload immediately.
+function renderFilterChips() {
+  const wrap = document.getElementById("active-filter-chips");
+  const chips = [];
+  if (state.categoryIds.length) chips.push({ key: "category", label: `Kategorie: ${namesForIds(state.categoryIds, state.categories).join(", ")}` });
+  if (state.accountIds.length) chips.push({ key: "account", label: `Konto: ${namesForIds(state.accountIds, state.accounts).join(", ")}` });
+  if (state.tagIds.length) chips.push({ key: "tag", label: `Tag: ${namesForIds(state.tagIds, state.tags).join(", ")}` });
+  if (state.type) chips.push({ key: "type", label: state.type === "income" ? "Nur Einnahmen" : "Nur Ausgaben" });
+  if (state.minAmount || state.maxAmount) {
+    chips.push({ key: "amount", label: `Betrag: ${state.minAmount || "−∞"} bis ${state.maxAmount || "∞"}` });
+  }
+  if (state.search) chips.push({ key: "search", label: `Suche: "${state.search}"` });
+
+  if (chips.length === 0) {
+    wrap.innerHTML = "";
+    wrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  wrap.innerHTML = chips.map((c) => `
+    <span class="filter-chip">${escapeHtml(c.label)}<button type="button" class="filter-chip-remove" data-key="${c.key}" title="Entfernen">&times;</button></span>
+  `).join("");
+  wrap.querySelectorAll(".filter-chip-remove").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const key = btn.dataset.key;
+      if (key === "category") { state.categoryIds = []; categoryMultiSelect.setSelected([]); }
+      if (key === "account") { state.accountIds = []; accountMultiSelect.setSelected([]); }
+      if (key === "tag") { state.tagIds = []; tagMultiSelect.setSelected([]); }
+      if (key === "type") { state.type = ""; document.getElementById("filter-type").value = ""; }
+      if (key === "amount") {
+        state.minAmount = ""; state.maxAmount = "";
+        document.getElementById("filter-min-amount").value = "";
+        document.getElementById("filter-max-amount").value = "";
+      }
+      if (key === "search") { state.search = ""; document.getElementById("filter-search").value = ""; }
+      saveFilterState();
+      renderFilterChips();
+      updateFilterBadge();
+      await loadData();
+    });
+  });
+}
+
+// Each page here is a full navigation (index.html/import.html/budget.html/
+// regeln.html), not an SPA route, so switching tabs and coming back always
+// re-runs this file from scratch — nothing survives in memory. Persisting
+// to localStorage (the same mechanism `layout`/LAYOUT_KEY above already
+// uses for widget positions) is what makes "the filters stay as I left
+// them" possible across that reload.
+const FILTER_STATE_KEY = "budget_dashboard_filters_v1";
+
+function saveFilterState() {
+  localStorage.setItem(FILTER_STATE_KEY, JSON.stringify({
+    granularity: state.granularity,
+    compare: state.compare,
+    accountIds: state.accountIds,
+    categoryIds: state.categoryIds,
+    tagIds: state.tagIds,
+    type: state.type,
+    minAmount: state.minAmount,
+    maxAmount: state.maxAmount,
+    search: state.search,
+    start: state.start,
+    end: state.end,
+  }));
+}
+
+function loadFilterState() {
+  try {
+    return JSON.parse(localStorage.getItem(FILTER_STATE_KEY) || "null");
+  } catch (err) {
+    return null;
+  }
+}
+
+// Applies a saved filter state to both `state` and the toolbar controls —
+// called once on init(), before the first loadData(), so the very first
+// fetch already reflects what was last applied rather than the defaults.
+function restoreFilterState() {
+  const saved = loadFilterState();
+  if (!saved) return;
+
+  state.granularity = saved.granularity || state.granularity;
+  state.compare = !!saved.compare;
+
+  const knownAccountIds = new Set(state.accounts.map((a) => String(a.id)));
+  const knownCategoryIds = new Set(state.categories.map((c) => String(c.id)));
+  const knownTagIds = new Set(state.tags.map((t) => String(t.id)));
+
+  // v1 of this key stored a single id per field (accountId/categoryId/
+  // tagId) from before these became multi-select; falling back to that
+  // singular key wrapped in an array keeps an already-active filter from
+  // silently vanishing for anyone whose browser still has the old shape
+  // saved. Either way, stale ids from a since-deleted account/category/tag
+  // are dropped rather than silently filtering on nothing.
+  const rawAccountIds = saved.accountIds || (saved.accountId ? [saved.accountId] : []);
+  const rawCategoryIds = saved.categoryIds || (saved.categoryId ? [saved.categoryId] : []);
+  const rawTagIds = saved.tagIds || (saved.tagId ? [saved.tagId] : []);
+
+  state.accountIds = rawAccountIds.map(String).filter((id) => knownAccountIds.has(id));
+  state.categoryIds = rawCategoryIds.map(String).filter((id) => knownCategoryIds.has(id));
+  state.tagIds = rawTagIds.map(String).filter((id) => knownTagIds.has(id));
+
+  state.type = saved.type || "";
+  state.minAmount = saved.minAmount || "";
+  state.maxAmount = saved.maxAmount || "";
+  state.search = saved.search || "";
+
+  document.querySelectorAll("#granularity-picker .segmented-option").forEach((b) => {
+    b.classList.toggle("active", b.dataset.granularity === state.granularity);
+  });
+  document.getElementById("compare-toggle").checked = state.compare;
+  categoryMultiSelect.setSelected(state.categoryIds);
+  accountMultiSelect.setSelected(state.accountIds);
+  tagMultiSelect.setSelected(state.tagIds);
+  document.getElementById("filter-type").value = state.type;
+  document.getElementById("filter-min-amount").value = state.minAmount;
+  document.getElementById("filter-max-amount").value = state.maxAmount;
+  document.getElementById("filter-search").value = state.search;
+  updateCustomFieldsVisibility();
+  renderFilterChips();
+  updateFilterBadge();
+
+  if (state.granularity === "custom" && saved.start && saved.end) {
+    state.start = saved.start;
+    state.end = saved.end;
+    document.getElementById("filter-start").value = saved.start;
+    document.getElementById("filter-end").value = saved.end;
+  }
 }
 
 document.getElementById("granularity-picker").addEventListener("click", async (event) => {
@@ -809,6 +1464,7 @@ document.getElementById("granularity-picker").addEventListener("click", async (e
   document.querySelectorAll("#granularity-picker .segmented-option").forEach((b) => b.classList.toggle("active", b === btn));
   state.granularity = btn.dataset.granularity;
   updateCustomFieldsVisibility();
+  saveFilterState();
   if (state.granularity !== "custom") {
     await loadData();
   }
@@ -816,17 +1472,46 @@ document.getElementById("granularity-picker").addEventListener("click", async (e
 
 document.getElementById("compare-toggle").addEventListener("change", async (event) => {
   state.compare = event.target.checked;
+  saveFilterState();
   await loadData();
 });
 
 document.getElementById("apply-filters-btn").addEventListener("click", async () => {
-  state.accountId = document.getElementById("filter-account").value;
-  state.categoryId = document.getElementById("filter-category").value;
-  state.tagId = document.getElementById("filter-tag").value;
+  state.accountIds = accountMultiSelect.getSelected();
+  state.categoryIds = categoryMultiSelect.getSelected();
+  state.tagIds = tagMultiSelect.getSelected();
+  state.type = document.getElementById("filter-type").value;
+  state.minAmount = document.getElementById("filter-min-amount").value;
+  state.maxAmount = document.getElementById("filter-max-amount").value;
+  state.search = document.getElementById("filter-search").value;
   if (state.granularity === "custom") {
     state.start = document.getElementById("filter-start").value || state.start;
     state.end = document.getElementById("filter-end").value || state.end;
   }
+  saveFilterState();
+  renderFilterChips();
+  updateFilterBadge();
+  await loadData();
+});
+
+document.getElementById("reset-filters-btn").addEventListener("click", async () => {
+  state.accountIds = [];
+  state.categoryIds = [];
+  state.tagIds = [];
+  state.type = "";
+  state.minAmount = "";
+  state.maxAmount = "";
+  state.search = "";
+  categoryMultiSelect.setSelected([]);
+  accountMultiSelect.setSelected([]);
+  tagMultiSelect.setSelected([]);
+  document.getElementById("filter-type").value = "";
+  document.getElementById("filter-min-amount").value = "";
+  document.getElementById("filter-max-amount").value = "";
+  document.getElementById("filter-search").value = "";
+  saveFilterState();
+  renderFilterChips();
+  updateFilterBadge();
   await loadData();
 });
 
@@ -841,25 +1526,38 @@ async function loadFilterOptions() {
   state.categories = categories;
   state.accounts = accounts;
   state.tags = tags;
-
-  document.getElementById("filter-account").innerHTML = '<option value="">Alle Konten</option>' +
-    accounts.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("");
-  document.getElementById("filter-category").innerHTML = '<option value="">Alle Kategorien</option>' +
-    categories.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
-  document.getElementById("filter-tag").innerHTML = '<option value="">Alle Tags</option>' +
-    tags.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("");
 }
 
 async function loadBudgets() {
   state.budgets = await fetch("/api/budgets").then((r) => r.json());
 }
 
+// Deliberately NOT scoped to summaryParams(state.start, state.end) — /api/
+// recurring uses its own fixed lookback window server-side regardless of
+// the toolbar's period picker (see server/app.py's recurring() route), so
+// only the non-date filters (account/category/tag/...) are passed through.
+async function loadRecurring() {
+  const params = applyCommonFilterParams(new URLSearchParams());
+  state.recurring = await fetch(`/api/recurring?${params.toString()}`).then((r) => r.json());
+}
+
+// Applied everywhere a fetch is filtered — so every widget on the page
+// (KPIs, every chart, the budget-vs-actual widgets) reflects the same
+// filter set.
+function applyCommonFilterParams(params) {
+  if (state.accountIds.length) params.set("account_id", state.accountIds.join(","));
+  if (state.categoryIds.length) params.set("category_id", state.categoryIds.join(","));
+  if (state.tagIds.length) params.set("tag_id", state.tagIds.join(","));
+  if (state.type) params.set("type", state.type);
+  if (state.minAmount) params.set("min_amount", state.minAmount);
+  if (state.maxAmount) params.set("max_amount", state.maxAmount);
+  if (state.search) params.set("q", state.search);
+  return params;
+}
+
 function summaryParams(start, end) {
   const params = new URLSearchParams({ start, end, granularity: state.granularity === "custom" ? "month" : state.granularity });
-  if (state.accountId) params.set("account_id", state.accountId);
-  if (state.categoryId) params.set("category_id", state.categoryId);
-  if (state.tagId) params.set("tag_id", state.tagId);
-  return params;
+  return applyCommonFilterParams(params);
 }
 
 async function loadData() {
@@ -885,12 +1583,17 @@ async function loadData() {
     state.prevSummary = null;
   }
 
-  await loadBudgets();
+  await Promise.all([loadBudgets(), loadRecurring()]);
   renderAllWidgets();
 }
 
 (async function init() {
   updateCustomFieldsVisibility();
   await loadFilterOptions();
+  initMultiSelects();
+  setFiltersExpanded(localStorage.getItem(FILTERS_EXPANDED_KEY) !== "0");
+  restoreFilterState();
+  renderFilterChips();
+  updateFilterBadge();
   await loadData();
 })();

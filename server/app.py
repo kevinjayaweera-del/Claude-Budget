@@ -1,5 +1,6 @@
+import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -8,9 +9,69 @@ from flask import Flask, abort, current_app, jsonify, request, send_from_directo
 from server.db import get_connection, init_db, reset_db, reset_imported_data
 from server.import_service import scan_and_parse
 from server.categorize import RuleBasedCategorizer, compute_confidence
+from server.normalize import normalize_description
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
+
+# Groups transaction descriptions from the same merchant that otherwise
+# differ only by a card-suffix/reference/postal-code digit run (e.g. "Coop-
+# 5307 ZH Hauptbhf" vs "Coop-1122 Bern") — the same digit-stripping trick
+# used ad-hoc during this project's manual categorization audits, promoted
+# here so the Analyse tab's merchant breakdown and recurring-payment
+# detector both group merchants identically to how a human auditor would.
+_MERCHANT_DIGIT_RUN_RE = re.compile(r"\b\d{3,6}\b")
+
+
+def _merchant_key(description):
+    key = normalize_description(description)
+    key = _MERCHANT_DIGIT_RUN_RE.sub("", key)
+    return re.sub(r"\s+", " ", key).strip()
+
+
+# Loose enough to tolerate a small price change (e.g. an FX-driven or
+# annual subscription price bump) without losing the merchant, tight enough
+# to exclude unrelated same-merchant purchases that just happen to recur
+# (e.g. grocery runs) from being flagged as a "subscription".
+_RECURRING_MIN_MONTHS = 3
+_RECURRING_MAX_AMOUNT_RATIO = 1.3
+
+
+def _detect_recurring_merchants(rows):
+    """rows: dict-likes with date/description/amount_cents/category_name,
+    already restricted to expenses within the lookback window. A merchant
+    counts as recurring if it appears in at least _RECURRING_MIN_MONTHS
+    distinct calendar months and its amount stays within
+    _RECURRING_MAX_AMOUNT_RATIO peak-to-trough."""
+    groups = {}
+    for r in rows:
+        groups.setdefault(_merchant_key(r["description"]), []).append(r)
+
+    result = []
+    for key, txns in groups.items():
+        months = {t["date"][:7] for t in txns}
+        if len(months) < _RECURRING_MIN_MONTHS:
+            continue
+        amounts = [abs(t["amount_cents"]) for t in txns]
+        if min(amounts) == 0 or max(amounts) / min(amounts) > _RECURRING_MAX_AMOUNT_RATIO:
+            continue
+        dates = sorted(t["date"] for t in txns)
+        descriptions = [t["description"] for t in txns]
+        label = max(set(descriptions), key=descriptions.count)
+        category_names = [t["category_name"] for t in txns if t["category_name"]]
+        category_name = max(set(category_names), key=category_names.count) if category_names else None
+        result.append({
+            "merchant": label,
+            "merchant_key": key,
+            "category_name": category_name,
+            "avg_amount_cents": int(round(sum(amounts) / len(amounts))),
+            "occurrences": len(txns),
+            "distinct_months": len(months),
+            "last_date": dates[-1],
+            "first_date": dates[0],
+        })
+    result.sort(key=lambda r: -r["avg_amount_cents"])
+    return result
 
 
 def _backup_database(db_path):
@@ -72,6 +133,18 @@ def _period_key(dates, granularity):
     return _PERIOD_KEY_FORMATTERS[granularity](dates)
 
 
+def _split_multi_value(raw):
+    """category_id/account_id/tag_id accept a single id ("5") or a
+    comma-separated list ("5,9,12") for multi-select filtering — the Budget
+    tab's filter UI lets users pick several categories/accounts/tags at
+    once to compare them side by side. Single-id callers (existing tests,
+    drill-down clicks) keep working unchanged since a value with no comma
+    is just a one-element list."""
+    if not raw:
+        return []
+    return [v for v in raw.split(",") if v]
+
+
 def _fetch_filtered_transactions(conn, args):
     query = (
         "SELECT t.id, t.date, t.description, t.amount_cents, t.currency, "
@@ -89,18 +162,30 @@ def _fetch_filtered_transactions(conn, args):
     if args.get("end"):
         query += " AND t.date <= ?"
         params.append(args["end"])
-    if args.get("category_id"):
-        query += " AND t.category_id = ?"
-        params.append(args["category_id"])
+    category_ids = _split_multi_value(args.get("category_id"))
+    if category_ids:
+        query += f" AND t.category_id IN ({','.join('?' for _ in category_ids)})"
+        params.extend(category_ids)
+    else:
+        # Hidden categories (e.g. "Versteckt") are excluded from every
+        # default view — ledger, dashboard, budgets. Explicitly filtering by
+        # that category_id (above) is the one deliberate way to still see
+        # them, e.g. from "Regeln verwalten".
+        query += " AND COALESCE(c.is_hidden, 0) = 0"
     if args.get("source"):
         query += " AND t.source = ?"
         params.append(args["source"])
-    if args.get("account_id"):
-        query += " AND t.account_id = ?"
-        params.append(args["account_id"])
-    if args.get("tag_id"):
-        query += " AND EXISTS (SELECT 1 FROM transaction_tags tt WHERE tt.transaction_id = t.id AND tt.tag_id = ?)"
-        params.append(args["tag_id"])
+    account_ids = _split_multi_value(args.get("account_id"))
+    if account_ids:
+        query += f" AND t.account_id IN ({','.join('?' for _ in account_ids)})"
+        params.extend(account_ids)
+    tag_ids = _split_multi_value(args.get("tag_id"))
+    if tag_ids:
+        query += (
+            " AND EXISTS (SELECT 1 FROM transaction_tags tt WHERE tt.transaction_id = t.id "
+            f"AND tt.tag_id IN ({','.join('?' for _ in tag_ids)}))"
+        )
+        params.extend(tag_ids)
     if args.get("type") == "income":
         query += " AND t.amount_cents > 0"
     elif args.get("type") == "expense":
@@ -123,7 +208,15 @@ def _fetch_filtered_transactions(conn, args):
         query += " AND t.amount_cents <= ?"
         params.append(round(max_amount * 100))
     query += " ORDER BY t.date DESC"
-    return conn.execute(query, params).fetchall()
+    rows = conn.execute(query, params).fetchall()
+    # merchant_key has no SQL-side equivalent (it's a Python regex pipeline),
+    # so this filters the already-fetched rows rather than the query itself —
+    # used by the Analyse tab's Top-Händler/Wiederkehrende-Zahlungen widgets
+    # to drill down into exactly the merchant group a summary row aggregated.
+    merchant_key = args.get("merchant_key")
+    if merchant_key:
+        rows = [r for r in rows if _merchant_key(r["description"]) == merchant_key]
+    return rows
 
 
 def _attach_tags(conn, rows):
@@ -218,6 +311,11 @@ def register_routes(app):
             "SELECT p.id, p.date, p.description, p.amount_cents, p.currency, "
             "p.category_id, c.name as category_name, p.source, p.category_confidence "
             "FROM pending_transactions p LEFT JOIN categories c ON p.category_id = c.id "
+            # Hidden-category rows never reach pending_transactions in the
+            # normal path (import_service.py routes them straight into
+            # transactions), but this guards against one surfacing here
+            # anyway — e.g. a manual re-categorization mid-review.
+            "WHERE COALESCE(c.is_hidden, 0) = 0 "
             "ORDER BY p.date"
         ).fetchall()
         conn.close()
@@ -330,7 +428,13 @@ def register_routes(app):
                         (suggested_rule_id,),
                     )
                     if should_learn:
-                        categorizer.learn(row["description"], final_category_id, was_correction=True)
+                        suggested_keyword = conn.execute(
+                            "SELECT keyword FROM category_rules WHERE id = ?", (suggested_rule_id,)
+                        ).fetchone()["keyword"]
+                        categorizer.learn(
+                            row["description"], final_category_id, was_correction=True,
+                            exclude_keyword=suggested_keyword,
+                        )
                 else:
                     conn.execute(
                         "UPDATE category_rules SET match_count = match_count + 1 WHERE id = ?",
@@ -698,6 +802,86 @@ def register_routes(app):
         finally:
             conn.close()
 
+    @app.route("/api/transactions/tags/bulk", methods=["POST"])
+    def bulk_assign_tag():
+        # Built for "tag every booking from this trip" — a date range (start/
+        # end, both required so this can't accidentally sweep the whole
+        # ledger) plus any of the usual filters (category_id, account_id,
+        # type, amount, q). Reuses _fetch_filtered_transactions so this stays
+        # in lockstep with every other filtered view instead of duplicating
+        # the WHERE-clause logic.
+        data = request.get_json(silent=True)
+        if data is None or not data.get("tag_id"):
+            return jsonify({"error": "request body must include tag_id"}), 400
+        if not data.get("start") or not data.get("end"):
+            return jsonify({"error": "request body must include start and end"}), 400
+        conn = get_db()
+        try:
+            tag = conn.execute("SELECT id FROM tags WHERE id = ?", (data["tag_id"],)).fetchone()
+            if tag is None:
+                return jsonify({"error": "tag not found"}), 404
+            # data's own "tag_id" (the tag to ASSIGN) would otherwise collide
+            # with _fetch_filtered_transactions's "tag_id" filter (transactions
+            # already carrying that tag) — exclude it so this bulk-assigns by
+            # date/category/account/type/amount/search only, never by
+            # "already has tag X", which isn't a meaningful filter here anyway.
+            filter_args = {k: v for k, v in data.items() if k != "tag_id"}
+            rows = _fetch_filtered_transactions(conn, filter_args)
+            for row in rows:
+                conn.execute(
+                    "INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)",
+                    (row["id"], data["tag_id"]),
+                )
+            conn.commit()
+            return jsonify({"tagged": len(rows)})
+        finally:
+            conn.close()
+
+    # Merchant-name vocabulary strongly associated with travel booking/travel
+    # itself — deliberately NOT based on the merchant's billing city/country
+    # suffix some descriptions carry (e.g. "SPOTIFYCH,STOCKHOLM",
+    # "OPENAI*CHATGPTSUBSCR,DUBLIN"): that suffix is usually just the
+    # service's corporate billing address and fires on ordinary subscriptions
+    # having nothing to do with travel. This keyword list is the precise
+    # signal; the scan is a discovery aid to help find trip date ranges; it
+    # doesn't tag anything by itself.
+    _TRAVEL_KEYWORDS = [
+        "hotel", "hostel", "booking.com", "airbnb", "expedia", "trivago",
+        "airlines", "airline", "swissintlairlines", "lufthansa", "ryanair",
+        "easyjet", "klm", "britishairways", "airfrance", "eurowings",
+        "hertz", "sixt", "europcar", "avis", "rentalcars", "mietwagen",
+        "skyscanner", "scandic", "marriott", "hilton", "novotel", "ibis",
+        "flughafen", "airport",
+    ]
+
+    @app.route("/api/transactions/travel-candidates", methods=["GET"])
+    def travel_candidates():
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT t.id, t.date, t.description, t.amount_cents, "
+                "c.name AS category_name "
+                "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id "
+                "ORDER BY t.date"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        candidates = []
+        for row in rows:
+            normalized = normalize_description(row["description"])
+            matched = [kw for kw in _TRAVEL_KEYWORDS if kw in normalized]
+            if matched:
+                candidates.append({
+                    "id": row["id"],
+                    "date": row["date"],
+                    "description": row["description"],
+                    "amount_cents": row["amount_cents"],
+                    "category_name": row["category_name"],
+                    "matched_keywords": matched,
+                })
+        return jsonify(candidates)
+
     @app.route("/api/accounts", methods=["GET"])
     def list_accounts():
         conn = get_db()
@@ -840,12 +1024,26 @@ def register_routes(app):
         conn = get_db()
         rows = _fetch_filtered_transactions(conn, request.args)
         categories = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM categories")}
+        # Tags are many-to-many (transaction_tags), unlike category_id, so
+        # they can't ride along on the same SELECT — fetched here (while the
+        # connection is still open) as a separate id -> [tag names] map for
+        # the by_tag breakdown below.
+        row_ids = [r["id"] for r in rows]
+        tags_by_txn = {}
+        if row_ids:
+            placeholders = ",".join("?" for _ in row_ids)
+            for tr in conn.execute(
+                f"SELECT tt.transaction_id, tg.name AS tag_name FROM transaction_tags tt "
+                f"JOIN tags tg ON tt.tag_id = tg.id WHERE tt.transaction_id IN ({placeholders})",
+                row_ids,
+            ):
+                tags_by_txn.setdefault(tr["transaction_id"], []).append(tr["tag_name"])
         conn.close()
 
         if not rows:
             return jsonify({
                 "total_income": 0, "total_expense": 0, "by_category": [],
-                "by_month": [], "by_period": [],
+                "by_category_income": [], "by_merchant": [], "by_tag": [], "by_month": [], "by_period": [],
             })
 
         df = pd.DataFrame([dict(r) for r in rows])
@@ -871,6 +1069,57 @@ def register_routes(app):
                 {"category": categories.get(row.category_id, "Unbekannt"), "amount_cents": int(row.amount_cents)}
                 for row in grouped.itertuples()
             ]
+
+        income = counted[counted.amount_cents > 0].copy()
+        by_category_income_list = []
+        if not income.empty:
+            grouped_income = income.groupby("category_id")["amount_cents"].sum().reset_index()
+            by_category_income_list = [
+                {"category": categories.get(row.category_id, "Unbekannt"), "amount_cents": int(row.amount_cents)}
+                for row in grouped_income.itertuples()
+            ]
+
+        # Merchant breakdown for the Analyse tab's "Top-Händler" widget —
+        # groups expenses the same way the manual categorization audits did
+        # (see _merchant_key), so e.g. every "Coop-<branch> ..." row lands
+        # under one entry instead of one per branch/card-suffix variant.
+        # "label" picks the group's most common raw description as a
+        # human-readable representative; merchant_key is what the frontend
+        # sends back for drilldown (via /api/transactions?merchant_key=...).
+        by_merchant_list = []
+        if not expenses.empty:
+            merchant_expenses = expenses.copy()
+            merchant_expenses["merchant_key"] = merchant_expenses["description"].map(_merchant_key)
+            labels = merchant_expenses.groupby("merchant_key")["description"].agg(
+                lambda s: s.value_counts().idxmax()
+            )
+            grouped_merchant = merchant_expenses.groupby("merchant_key").agg(
+                amount_cents=("amount_cents", "sum"), count=("merchant_key", "size")
+            ).reset_index()
+            grouped_merchant["label"] = grouped_merchant["merchant_key"].map(labels)
+            grouped_merchant = grouped_merchant.sort_values("amount_cents")
+            by_merchant_list = [
+                {
+                    "merchant": row.label,
+                    "merchant_key": row.merchant_key,
+                    "amount_cents": int(abs(row.amount_cents)),
+                    "count": int(row.count),
+                }
+                for row in grouped_merchant.itertuples()
+            ][:15]
+
+        # Mirrors by_category (expenses only), but a transaction can carry
+        # several tags at once — each one gets the full amount, same as
+        # filtering the ledger by that tag would show, rather than splitting
+        # it between tags.
+        tag_totals = {}
+        for row in expenses.itertuples():
+            for tag_name in tags_by_txn.get(row.id, []):
+                tag_totals[tag_name] = tag_totals.get(tag_name, 0) + abs(row.amount_cents)
+        by_tag_list = [
+            {"tag": name, "amount_cents": int(amount)}
+            for name, amount in sorted(tag_totals.items())
+        ]
 
         by_month = counted.groupby("month")["amount_cents"].sum().reset_index()
         by_month_list = [
@@ -899,9 +1148,36 @@ def register_routes(app):
             "total_income": total_income,
             "total_expense": total_expense,
             "by_category": by_category_list,
+            "by_category_income": by_category_income_list,
+            "by_merchant": by_merchant_list,
+            "by_tag": by_tag_list,
             "by_month": by_month_list,
             "by_period": by_period_list,
         })
+
+    @app.route("/api/recurring", methods=["GET"])
+    def recurring():
+        # Deliberately its own lookback window rather than the Analyse tab's
+        # toolbar period — a subscription's cadence only shows up across
+        # several months, so this always looks back lookback_days regardless
+        # of what date range the rest of the page is currently filtered to.
+        # Non-date filters (account/category/tag/...) still apply, same as
+        # every other endpoint the toolbar drives.
+        try:
+            lookback_days = int(request.args.get("lookback_days", 180))
+        except ValueError:
+            abort(400, description="lookback_days must be a number")
+        cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+        conn = get_db()
+        args = dict(request.args)
+        args["start"] = cutoff
+        args["type"] = "expense"
+        rows = _fetch_filtered_transactions(conn, args)
+        conn.close()
+
+        rows = [dict(r) for r in rows if not r["excluded_from_totals"]]
+        return jsonify(_detect_recurring_merchants(rows))
 
     @app.route("/api/export", methods=["GET"])
     def export_data():
@@ -914,7 +1190,7 @@ def register_routes(app):
             data = {
                 "exported_at": datetime.now().isoformat(),
                 "categories": [dict(r) for r in conn.execute(
-                    "SELECT id, name, excluded_from_totals FROM categories ORDER BY id"
+                    "SELECT id, name, excluded_from_totals, is_hidden FROM categories ORDER BY id"
                 )],
                 "category_rules": [dict(r) for r in conn.execute(
                     "SELECT * FROM category_rules ORDER BY id"

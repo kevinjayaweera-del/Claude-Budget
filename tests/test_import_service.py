@@ -293,3 +293,32 @@ def test_scan_and_parse_skips_categorization_when_disabled(tmp_path):
     assert pending["category_id"] == unkategorisiert_id
     assert pending["suggested_rule_id"] is None
     assert pending["category_confidence"] is None
+
+
+def test_scan_and_parse_routes_hidden_category_straight_into_transactions(tmp_path):
+    statements_dir = tmp_path / "statements"
+    statements_dir.mkdir()
+    (statements_dir / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;OnlyFans.com Payment;-19.99;CHF\n",
+        encoding="utf-8-sig",
+    )
+    conn = init_db(tmp_path / "test.db")
+
+    result = scan_and_parse(conn, statements_dir)
+
+    assert result == {"created": 1, "duplicates_skipped": 0}
+    # Never touches pending_transactions — no review step, no KPI count.
+    assert conn.execute("SELECT COUNT(*) c FROM pending_transactions").fetchone()["c"] == 0
+    transactions = conn.execute("SELECT * FROM transactions").fetchall()
+    assert len(transactions) == 1
+    versteckt_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Versteckt'"
+    ).fetchone()["id"]
+    assert transactions[0]["category_id"] == versteckt_id
+    assert transactions[0]["manually_corrected"] == 0
+
+    # Still counted by the per-file reconciliation total.
+    file_row = conn.execute(
+        "SELECT f.id FROM imported_files f WHERE f.filename = 'test.csv'"
+    ).fetchone()
+    assert transactions[0]["file_id"] == file_row["id"]

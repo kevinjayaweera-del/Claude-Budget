@@ -14,7 +14,7 @@ const CATEGORY_COLORS = {
   "Freizeit": "var(--cat-freizeit)",
   "Bargeldbezug": "var(--cat-bargeldbezug)",
   "Privatüberweisungen": "var(--cat-privatuberweisungen)",
-  "Sparen/Anlegen": "var(--cat-sparen-anlegen)",
+  "Sparen": "var(--cat-sparen-anlegen)",
   "Lohn/Einkommen": "var(--cat-lohn-einkommen)",
   "Sonstiges": "var(--cat-sonstiges)",
   "Kreditkarten-Ausgleich": "var(--cat-kreditkarten-ausgleich)",
@@ -22,6 +22,13 @@ const CATEGORY_COLORS = {
   "Auto": "var(--cat-auto)",
   "Hobby": "var(--cat-hobby)",
   "Steuern": "var(--cat-steuern)",
+  "Haustier": "var(--cat-haustier)",
+  "Anlegen": "var(--cat-anlegen)",
+  "Vorsorge": "var(--cat-vorsorge)",
+  "Kleidung": "var(--cat-kleidung)",
+  "Elektronik": "var(--cat-elektronik)",
+  "Körperpflege": "var(--cat-koerperpflege)",
+  "Sport/Fahrrad": "var(--cat-sport-fahrrad)",
 };
 const MONTH_LABELS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 
@@ -97,6 +104,55 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// index.html/import.html/analyse.html/regeln.html are separate page loads,
+// not SPA routes — switching tabs and coming back re-runs this file from
+// scratch, so nothing in memory survives. localStorage is what makes "the
+// filters stay as I left them" possible across that reload (same pattern
+// as analyse.js's LAYOUT_KEY for widget positions).
+const UEBERSICHT_FILTER_KEY = "budget_uebersicht_filters_v1";
+
+function saveFilterState() {
+  localStorage.setItem(UEBERSICHT_FILTER_KEY, JSON.stringify({
+    start: document.getElementById("filter-start").value,
+    end: document.getElementById("filter-end").value,
+    categoryId: document.getElementById("filter-category").value,
+    source: document.getElementById("filter-source").value,
+    type: document.getElementById("filter-type").value,
+    minAmount: document.getElementById("filter-min-amount").value,
+    maxAmount: document.getElementById("filter-max-amount").value,
+    search: document.getElementById("filter-search").value,
+  }));
+}
+
+// Returns true if a saved state was found and applied — the caller uses
+// this to decide whether the (only otherwise-relevant-on-first-visit)
+// default_date_range_days setting should still apply.
+function restoreFilterState() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(UEBERSICHT_FILTER_KEY) || "null");
+  } catch (err) {
+    saved = null;
+  }
+  if (!saved) return false;
+
+  document.getElementById("filter-start").value = saved.start || "";
+  document.getElementById("filter-end").value = saved.end || "";
+  // Guard against a stale id from a since-deleted category — fall back to
+  // "Alle Kategorien" rather than silently filtering on nothing.
+  const categorySelect = document.getElementById("filter-category");
+  categorySelect.value = saved.categoryId || "";
+  if (categorySelect.value !== (saved.categoryId || "")) categorySelect.value = "";
+  const sourceSelect = document.getElementById("filter-source");
+  sourceSelect.value = saved.source || "";
+  if (sourceSelect.value !== (saved.source || "")) sourceSelect.value = "";
+  document.getElementById("filter-type").value = saved.type || "";
+  document.getElementById("filter-min-amount").value = saved.minAmount || "";
+  document.getElementById("filter-max-amount").value = saved.maxAmount || "";
+  document.getElementById("filter-search").value = saved.search || "";
+  return true;
 }
 
 function buildQuery() {
@@ -223,11 +279,11 @@ document.querySelector("#transactions-table tbody").addEventListener("change", a
   await loadTransactions();
 });
 
-function renderCategoryBars(byCategory) {
-  const container = document.getElementById("category-bars");
+function renderCategoryBars(containerId, byCategory, emptyMessage) {
+  const container = document.getElementById(containerId);
   container.innerHTML = "";
   if (byCategory.length === 0) {
-    container.innerHTML = '<p class="panel-empty">Keine Ausgaben im gewählten Zeitraum.</p>';
+    container.innerHTML = `<p class="panel-empty">${escapeHtml(emptyMessage)}</p>`;
     return;
   }
   const sorted = [...byCategory].sort((a, b) => b.amount_cents - a.amount_cents);
@@ -249,53 +305,25 @@ function renderCategoryBars(byCategory) {
 
 function renderTrendChart(byMonth) {
   const container = document.getElementById("trend-chart");
-  container.innerHTML = "";
   if (byMonth.length === 0) {
     container.innerHTML = '<p class="panel-empty">Keine Daten im gewählten Zeitraum.</p>';
     return;
   }
-
   const sorted = [...byMonth].sort((a, b) => a.month.localeCompare(b.month));
-  const width = 400;
-  const height = 140;
-  const padY = 16;
-  const values = sorted.map((m) => m.amount_cents / 100);
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 0);
-  const range = max - min || 1;
-
-  const points = sorted.map((m, i) => {
-    const x = sorted.length === 1 ? width / 2 : (i / (sorted.length - 1)) * width;
-    const y = height - padY - ((m.amount_cents / 100 - min) / range) * (height - padY * 2);
-    return [x, y];
+  const data = sorted.map((m) => ({ x: m.month, net: m.amount_cents }));
+  // container's height comes from CSS (.panel-body's clamp()), not from
+  // renderChart's own default — that's what lets this chart grow/shrink
+  // together with the category-bars panel next to it instead of always
+  // rendering at a fixed pixel height regardless of available space.
+  renderChart(container, {
+    type: "area",
+    data,
+    series: [{ key: "net", label: "Netto", color: "var(--accent)" }],
+    formatValue: formatMoney,
+    formatX: formatMonthLabel,
+    showLegend: false,
+    height: container.clientHeight || 300,
   });
-
-  const linePath = points.map(([x, y], i) => `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
-  const areaPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
-  const [lastX, lastY] = points[points.length - 1];
-  const gridLines = [0.25, 0.5, 0.75]
-    .map((f) => `<line x1="0" y1="${(height * f).toFixed(1)}" x2="${width}" y2="${(height * f).toFixed(1)}" stroke="var(--line)" stroke-width="1" />`)
-    .join("");
-
-  const first = sorted[0];
-  const last = sorted[sorted.length - 1];
-  const ariaLabel = escapeHtml(
-    `Netto pro Monat, von ${formatMonthLabel(first.month)} (CHF ${formatMoney(first.amount_cents)}) bis ${formatMonthLabel(last.month)} (CHF ${formatMoney(last.amount_cents)})`
-  );
-
-  container.innerHTML = `
-    <figure class="trend-figure">
-      <svg viewBox="0 0 ${width} ${height}" width="100%" height="140" role="img" aria-label="${ariaLabel}">
-        ${gridLines}
-        <path d="${areaPath}" fill="var(--accent)" opacity="0.08" stroke="none" />
-        <path d="${linePath}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
-        <circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" />
-      </svg>
-      <figcaption class="trend-caption">
-        ${sorted.map((m) => `<span>${escapeHtml(formatMonthLabel(m.month))}</span>`).join("")}
-      </figcaption>
-    </figure>
-  `;
 }
 
 async function loadSummary() {
@@ -307,7 +335,8 @@ async function loadSummary() {
   document.getElementById("total-expense").textContent = formatMoney(Math.abs(summary.total_expense));
   document.getElementById("total-balance").textContent = formatMoney(summary.total_income + summary.total_expense);
 
-  renderCategoryBars(summary.by_category);
+  renderCategoryBars("category-bars", summary.by_category, "Keine Ausgaben im gewählten Zeitraum.");
+  renderCategoryBars("category-bars-income", summary.by_category_income, "Keine Einnahmen im gewählten Zeitraum.");
   renderTrendChart(summary.by_month);
 }
 
@@ -315,12 +344,104 @@ async function refreshDashboard() {
   await Promise.all([loadTransactions(), loadSummary()]);
 }
 
-document.getElementById("apply-filters-btn").addEventListener("click", refreshDashboard);
+document.getElementById("apply-filters-btn").addEventListener("click", () => {
+  saveFilterState();
+  refreshDashboard();
+});
 
 (async function init() {
-  await loadAppSettings();
-  await loadCategories();
-  await loadSources();
-  await loadAllTags();
+  // Categories/sources populate the <select> options first — restoring a
+  // saved filter has to happen after that, or setting e.g. filter-category's
+  // value to a not-yet-existing <option> would silently fail.
+  await Promise.all([loadCategories(), loadSources(), loadAllTags()]);
+  populateTravelTagOptions();
+  const restored = restoreFilterState();
+  if (!restored) {
+    // First-ever visit (nothing saved yet) — fall back to the existing
+    // default_date_range_days behavior instead of an unfiltered view.
+    await loadAppSettings();
+  }
   await refreshDashboard();
 })();
+
+// ---------- travel detection / bulk tagging ----------
+
+function populateTravelTagOptions() {
+  document.getElementById("travel-tag-options").innerHTML = allTags
+    .map((t) => `<option value="${escapeHtml(t.name)}"></option>`)
+    .join("");
+}
+
+function renderTravelCandidates(candidates) {
+  const list = document.getElementById("travel-candidates-list");
+  if (candidates.length === 0) {
+    list.innerHTML = '<p class="panel-empty">Keine Reise-Hinweise gefunden.</p>';
+    list.classList.remove("hidden");
+    return;
+  }
+  list.innerHTML = candidates.map((c) => `
+    <div class="travel-candidate-row">
+      <span class="travel-candidate-date mono">${escapeHtml(formatDateSwiss(c.date))}</span>
+      <span class="travel-candidate-desc">${escapeHtml(c.description)}</span>
+      <span class="travel-candidate-keyword">${escapeHtml(c.matched_keywords.join(", "))}</span>
+      <span class="travel-candidate-amount tabular ${c.amount_cents >= 0 ? "credit" : "debit"}">${formatMoney(c.amount_cents)}</span>
+      <button type="button" class="btn-ghost btn-small" data-action="use-date" data-date="${c.date}">Zeitraum übernehmen</button>
+    </div>
+  `).join("");
+  list.classList.remove("hidden");
+
+  list.querySelectorAll('[data-action="use-date"]').forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.getElementById("travel-tag-start").value = btn.dataset.date;
+      document.getElementById("travel-tag-end").value = btn.dataset.date;
+      document.getElementById("travel-tag-input").focus();
+    });
+  });
+}
+
+document.getElementById("scan-travel-btn").addEventListener("click", async () => {
+  const status = document.getElementById("travel-scan-status");
+  status.textContent = "Suche läuft…";
+  const candidates = await fetch("/api/transactions/travel-candidates").then((r) => r.json());
+  status.textContent = `${candidates.length} Hinweis(e) gefunden`;
+  renderTravelCandidates(candidates);
+});
+
+document.getElementById("apply-travel-tag-btn").addEventListener("click", async () => {
+  const tagName = document.getElementById("travel-tag-input").value.trim();
+  const start = document.getElementById("travel-tag-start").value;
+  const end = document.getElementById("travel-tag-end").value;
+  const resultEl = document.getElementById("travel-tag-result");
+
+  if (!tagName) { alert("Bitte einen Tag-Namen eingeben."); return; }
+  if (!start || !end) { alert("Bitte Von- und Bis-Datum wählen."); return; }
+
+  // Reuse an existing tag by exact (case-insensitive) name instead of always
+  // creating a new one — lets "Ferien", typed repeatedly across trips, keep
+  // accumulating under the same tag unless the user deliberately types a
+  // more specific new name (e.g. "Ferien Berlin").
+  let tag = allTags.find((t) => t.name.toLowerCase() === tagName.toLowerCase());
+  if (!tag) {
+    const res = await fetch("/api/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: tagName }),
+    });
+    if (!res.ok) { alert("Fehler beim Erstellen des Tags."); return; }
+    tag = await res.json();
+    await loadAllTags();
+    populateTravelTagOptions();
+  }
+
+  const bulkRes = await fetch("/api/transactions/tags/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tag_id: tag.id, start, end }),
+  });
+  if (!bulkRes.ok) { alert("Fehler beim Taggen der Buchungen."); return; }
+  const { tagged } = await bulkRes.json();
+
+  resultEl.textContent = `${tagged} Buchung(en) vom ${formatDateSwiss(start)} bis ${formatDateSwiss(end)} mit "${tagName}" getaggt.`;
+  resultEl.classList.remove("hidden");
+  await refreshDashboard();
+});

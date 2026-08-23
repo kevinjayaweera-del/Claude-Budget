@@ -61,6 +61,15 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
     uncategorized_id = conn.execute(
         "SELECT id FROM categories WHERE name = 'Unkategorisiert'"
     ).fetchone()["id"]
+    # Hidden categories (e.g. "Versteckt") skip pending review entirely —
+    # see server/db.py's CATEGORIES_HIDDEN. A matching row is inserted
+    # straight into transactions below instead of pending_transactions, so
+    # it never shows up in the import KPIs or the review table at all.
+    hidden_category_ids = {
+        row["id"] for row in conn.execute(
+            "SELECT id FROM categories WHERE is_hidden = 1"
+        )
+    }
 
     for path in sorted(statements_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in (".csv", ".pdf"):
@@ -122,15 +131,25 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
                         )
                     else:
                         category_id, confidence, rule_id = uncategorized_id, None, None
-                    conn.execute(
-                        "INSERT INTO pending_transactions "
-                        "(date, description, amount_cents, currency, category_id, source, file_id, "
-                        " account_id, suggested_category_id, suggested_rule_id, category_confidence) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (row["date"], row["description"], row["amount_cents"],
-                         row["currency"], category_id, source, file_id, account_id,
-                         category_id, rule_id, confidence if rule_id is not None else None),
-                    )
+                    if category_id in hidden_category_ids:
+                        conn.execute(
+                            "INSERT INTO transactions "
+                            "(date, description, amount_cents, currency, category_id, source, "
+                            " file_id, account_id, manually_corrected) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                            (row["date"], row["description"], row["amount_cents"],
+                             row["currency"], category_id, source, file_id, account_id),
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT INTO pending_transactions "
+                            "(date, description, amount_cents, currency, category_id, source, file_id, "
+                            " account_id, suggested_category_id, suggested_rule_id, category_confidence) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (row["date"], row["description"], row["amount_cents"],
+                             row["currency"], category_id, source, file_id, account_id,
+                             category_id, rule_id, confidence if rule_id is not None else None),
+                        )
                 file_created += 1
         except Exception as exc:
             if not dry_run:

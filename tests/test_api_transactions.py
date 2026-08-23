@@ -148,6 +148,39 @@ def test_summary_by_category_groups_expenses(client_with_data):
     assert unkategorisiert["amount_cents"] == 7590
 
 
+def test_summary_by_tag_groups_expenses(client_with_data):
+    # A transaction with two tags counts in full under each — filtering the
+    # ledger by either tag would show the same amount, so the breakdown
+    # shouldn't split it between them.
+    rows = client_with_data.get("/api/transactions").get_json()
+    musterladen = next(r for r in rows if r["description"] == "Musterladen Zürich")
+    beispielmarkt = next(r for r in rows if r["description"] == "Beispielmarkt Zürich")
+    urlaub_id = client_with_data.post("/api/tags", json={"name": "Urlaub"}).get_json()["id"]
+    einmalig_id = client_with_data.post("/api/tags", json={"name": "Einmalig"}).get_json()["id"]
+    client_with_data.post(f"/api/transactions/{musterladen['id']}/tags", json={"tag_id": urlaub_id})
+    client_with_data.post(f"/api/transactions/{musterladen['id']}/tags", json={"tag_id": einmalig_id})
+    client_with_data.post(f"/api/transactions/{beispielmarkt['id']}/tags", json={"tag_id": einmalig_id})
+
+    by_tag = {t["tag"]: t["amount_cents"] for t in client_with_data.get("/api/summary").get_json()["by_tag"]}
+
+    assert by_tag == {"Urlaub": 4590, "Einmalig": 4590 + 3000}
+
+
+def test_summary_by_category_income_groups_income(client_with_data):
+    # "Lohn April" matches the default "Lohn/Einkommen" category rule (see
+    # client_with_data's docstring) — by_category_income should surface it
+    # with its positive amount, mirroring by_category's expense breakdown.
+    summary = client_with_data.get("/api/summary").get_json()
+
+    lohn = next(
+        (c for c in summary["by_category_income"] if c["category"] == "Lohn/Einkommen"), None
+    )
+    assert lohn is not None
+    assert lohn["amount_cents"] == 520000
+    # Expense-only categories must not leak into the income breakdown.
+    assert all(c["amount_cents"] > 0 for c in summary["by_category_income"])
+
+
 def test_transactions_with_malformed_min_amount_returns_400(client_with_data):
     response = client_with_data.get("/api/transactions?min_amount=abc")
 
@@ -173,8 +206,29 @@ def test_summary_respects_category_filter(client_with_data):
     summary = client_with_data.get(f"/api/summary?category_id={lebensmittel_id}").get_json()
 
     assert summary == {
-        "total_income": 0, "total_expense": 0, "by_category": [], "by_month": [], "by_period": [],
+        "total_income": 0, "total_expense": 0, "by_category": [], "by_category_income": [],
+        "by_merchant": [], "by_tag": [], "by_month": [], "by_period": [],
     }
+
+
+def test_transactions_filtered_by_multiple_category_ids(client_with_data):
+    categories = {c["name"]: c["id"] for c in client_with_data.get("/api/categories").get_json()}
+    lebensmittel_id = categories["Lebensmittel"]
+    unkategorisiert_id = categories["Unkategorisiert"]
+    rows = client_with_data.get("/api/transactions").get_json()
+    musterladen = next(r for r in rows if r["description"] == "Musterladen Zürich")
+    client_with_data.put(f"/api/transactions/{musterladen['id']}", json={"category_id": lebensmittel_id})
+
+    # Comma-separated category_id is the Budget tab's multi-select filter —
+    # a transaction in EITHER selected category should match (OR, not AND).
+    filtered = client_with_data.get(
+        f"/api/transactions?category_id={lebensmittel_id},{unkategorisiert_id}"
+    ).get_json()
+
+    # "Lohn April" matches the default "Lohn/Einkommen" category rule, so it's
+    # neither Lebensmittel nor Unkategorisiert and must stay excluded here.
+    descriptions = {r["description"] for r in filtered}
+    assert descriptions == {"Musterladen Zürich", "Beispielmarkt Zürich"}
 
 
 def test_update_transaction_category_changes_category_and_flags_manual(client_with_data):
@@ -225,17 +279,24 @@ def test_update_transaction_category_does_not_learn_uncategorized(client_with_da
     categories = {c["name"]: c["id"] for c in client_with_data.get("/api/categories").get_json()}
     unkategorisiert_id = categories["Unkategorisiert"]
 
+    conn = get_connection(client_with_data.application.config["DB_PATH"])
+    rule_count_before = conn.execute("SELECT COUNT(*) c FROM category_rules").fetchone()["c"]
+    conn.close()
+
     client_with_data.put(f"/api/transactions/{txn['id']}", json={"category_id": unkategorisiert_id})
 
     # _extract_keyword() picks the longest word in the normalized
     # description ("lohn april" -> "april", 5 chars beats "lohn"'s 4) — the
-    # guard must skip learning entirely, so neither word gets a new rule.
+    # guard must skip learning entirely, so no new rule is created for
+    # either word. Checked via a before/after row count rather than
+    # asserting keyword IN ('lohn', 'april') is absent, since "lohn" is
+    # itself now a legitimate seeded default keyword (see
+    # DEFAULT_CATEGORY_KEYWORD_GROUPS's "Lohn/Einkommen") — its mere
+    # presence in the table isn't evidence of unwanted learning.
     conn = get_connection(client_with_data.application.config["DB_PATH"])
-    rule = conn.execute(
-        "SELECT id FROM category_rules WHERE keyword IN ('lohn', 'april')"
-    ).fetchone()
+    rule_count_after = conn.execute("SELECT COUNT(*) c FROM category_rules").fetchone()["c"]
     conn.close()
-    assert rule is None
+    assert rule_count_after == rule_count_before
 
 
 def test_update_transaction_category_missing_body_field_returns_400(client_with_data):
@@ -391,3 +452,49 @@ def test_delete_transactions_with_backup_creates_backup_file(client_with_data):
     backup_dir = db_path.parent / "backups"
     assert backup_dir.exists()
     assert list(backup_dir.glob("*.db"))
+
+
+# ---------- by_merchant / merchant_key (Analyse tab's "Top-Händler" widget) ----------
+
+def _import_csv(client, tmp_path, rows):
+    lines = ["Datum;Buchungstext;Betrag;Währung"] + rows
+    (tmp_path / "statements" / "test.csv").write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
+    client.post("/api/scan")
+    client.post("/api/import/confirm")
+
+
+def test_summary_by_merchant_groups_descriptions_differing_only_by_digits(tmp_path):
+    app = create_app(db_path=tmp_path / "test.db", statements_dir=tmp_path / "statements")
+    app.config["TESTING"] = True
+    client = app.test_client()
+    _import_csv(client, tmp_path, [
+        "01.03.2026;Coop-5307 ZH Hauptbhf;-20.00;CHF",
+        "02.03.2026;Coop-1122 ZH Hauptbhf;-15.50;CHF",
+        "03.03.2026;Musterladen Zürich;-45.90;CHF",
+    ])
+
+    summary = client.get("/api/summary").get_json()
+
+    coop = next(m for m in summary["by_merchant"] if m["merchant_key"] == "coop- zh hauptbhf")
+    assert coop["amount_cents"] == 3550
+    assert coop["count"] == 2
+    assert coop["merchant"] in ("Coop-5307 ZH Hauptbhf", "Coop-1122 ZH Hauptbhf")
+    musterladen = next(m for m in summary["by_merchant"] if m["merchant"] == "Musterladen Zürich")
+    assert musterladen["amount_cents"] == 4590
+    assert musterladen["count"] == 1
+
+
+def test_transactions_filtered_by_merchant_key(tmp_path):
+    app = create_app(db_path=tmp_path / "test.db", statements_dir=tmp_path / "statements")
+    app.config["TESTING"] = True
+    client = app.test_client()
+    _import_csv(client, tmp_path, [
+        "01.03.2026;Coop-5307 ZH Hauptbhf;-20.00;CHF",
+        "02.03.2026;Coop-1122 ZH Hauptbhf;-15.50;CHF",
+        "03.03.2026;Musterladen Zürich;-45.90;CHF",
+    ])
+
+    rows = client.get("/api/transactions", query_string={"merchant_key": "coop- zh hauptbhf"}).get_json()
+
+    assert len(rows) == 2
+    assert all(r["description"].startswith("Coop-") for r in rows)

@@ -130,3 +130,98 @@ def test_filter_transactions_by_tag_id(client, tmp_path):
 
     assert len(filtered) == 1
     assert filtered[0]["id"] == txns[0]["id"]
+
+
+def test_filter_transactions_by_multiple_tag_ids(client, tmp_path):
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n"
+        "01.03.2026;Migros Zürich;-45.90;CHF\n"
+        "02.03.2026;Coop Bern;-12.30;CHF\n"
+        "03.03.2026;Denner Basel;-8.00;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    client.post("/api/import/confirm")
+    txns = client.get("/api/transactions").get_json()
+    urlaub_id = client.post("/api/tags", json={"name": "Urlaub"}).get_json()["id"]
+    geschaeft_id = client.post("/api/tags", json={"name": "Geschäft"}).get_json()["id"]
+    client.post(f"/api/transactions/{txns[0]['id']}/tags", json={"tag_id": urlaub_id})
+    client.post(f"/api/transactions/{txns[1]['id']}/tags", json={"tag_id": geschaeft_id})
+
+    # Comma-separated tag_id is the Budget tab's multi-select filter —
+    # a transaction tagged with EITHER selected tag should match (OR, not AND).
+    filtered = client.get(f"/api/transactions?tag_id={urlaub_id},{geschaeft_id}").get_json()
+
+    assert {t["id"] for t in filtered} == {txns[0]["id"], txns[1]["id"]}
+
+
+def test_bulk_assign_tag_by_date_range(client, tmp_path):
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n"
+        "09.05.2025;Hotel Bern;-200.00;CHF\n"
+        "10.05.2025;Restaurant Bern;-45.00;CHF\n"
+        "15.05.2025;Migros Zürich;-30.00;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    client.post("/api/import/confirm")
+    txns = {t["description"]: t["id"] for t in client.get("/api/transactions").get_json()}
+    urlaub_id = client.post("/api/tags", json={"name": "Urlaub"}).get_json()["id"]
+
+    response = client.post(
+        "/api/transactions/tags/bulk",
+        json={"tag_id": urlaub_id, "start": "2025-05-09", "end": "2025-05-10"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"tagged": 2}
+    tagged_txns = client.get(f"/api/transactions?tag_id={urlaub_id}").get_json()
+    assert {t["description"] for t in tagged_txns} == {"Hotel Bern", "Restaurant Bern"}
+    # Outside the date range must stay untouched.
+    migros = client.get("/api/transactions").get_json()
+    migros_row = next(t for t in migros if t["description"] == "Migros Zürich")
+    assert migros_row["tags"] == []
+
+
+def test_bulk_assign_tag_is_idempotent_and_combinable_with_other_filters(client, tmp_path):
+    (tmp_path / "statements" / "test.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n"
+        "09.05.2025;Hotel Bern;-200.00;CHF\n"
+        "09.05.2025;Lohn Mai;3000.00;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    client.post("/api/import/confirm")
+    urlaub_id = client.post("/api/tags", json={"name": "Urlaub"}).get_json()["id"]
+
+    # type=expense excludes the salary credit on the same day.
+    first = client.post(
+        "/api/transactions/tags/bulk",
+        json={"tag_id": urlaub_id, "start": "2025-05-09", "end": "2025-05-09", "type": "expense"},
+    ).get_json()
+    second = client.post(
+        "/api/transactions/tags/bulk",
+        json={"tag_id": urlaub_id, "start": "2025-05-09", "end": "2025-05-09", "type": "expense"},
+    ).get_json()
+
+    assert first == {"tagged": 1}
+    assert second == {"tagged": 1}  # re-running doesn't error or duplicate
+    tagged = client.get(f"/api/transactions?tag_id={urlaub_id}").get_json()
+    assert len(tagged) == 1
+    assert tagged[0]["description"] == "Hotel Bern"
+
+
+def test_bulk_assign_tag_requires_tag_id_and_date_range(client):
+    missing_tag = client.post("/api/transactions/tags/bulk", json={"start": "2025-05-01", "end": "2025-05-02"})
+    missing_dates = client.post("/api/transactions/tags/bulk", json={"tag_id": 1})
+
+    assert missing_tag.status_code == 400
+    assert missing_dates.status_code == 400
+
+
+def test_bulk_assign_tag_with_unknown_tag_returns_404(client):
+    response = client.post(
+        "/api/transactions/tags/bulk", json={"tag_id": 999, "start": "2025-05-01", "end": "2025-05-02"}
+    )
+
+    assert response.status_code == 404

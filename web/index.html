@@ -86,16 +86,53 @@
         <div class="section-head">
           <p class="section-title">Ausgaben nach Kategorie</p>
         </div>
-        <div id="category-bars"></div>
+        <div id="category-bars" class="panel-body"></div>
       </div>
 
       <div class="panel">
         <div class="section-head">
+          <p class="section-title">Einnahmen nach Kategorie</p>
+        </div>
+        <div id="category-bars-income" class="panel-body"></div>
+      </div>
+
+      <div class="panel panel-chart">
+        <div class="section-head">
           <p class="section-title">Verlauf über Zeit</p>
           <span class="section-note">Netto pro Monat</span>
         </div>
-        <div id="trend-chart"></div>
+        <div id="trend-chart" class="panel-body"></div>
       </div>
+    </div>
+
+    <div class="section-head">
+      <p class="section-title">Reise-Erkennung</p>
+      <span class="section-note">Findet Hinweise auf Reisen (Hotels, Flüge, Mietwagen) und taggt Buchungen im gewählten Zeitraum</span>
+    </div>
+    <div class="panel travel-panel">
+      <div class="travel-scan-row">
+        <button id="scan-travel-btn" class="btn btn-ghost" type="button">Reise-Kandidaten suchen</button>
+        <span id="travel-scan-status" class="travel-scan-status"></span>
+      </div>
+      <div id="travel-candidates-list" class="travel-candidates-list hidden"></div>
+
+      <div class="travel-tag-form">
+        <div class="field">
+          <label class="field-label" for="travel-tag-input">Tag</label>
+          <input id="travel-tag-input" type="text" list="travel-tag-options" placeholder="z.B. Ferien Berlin">
+          <datalist id="travel-tag-options"></datalist>
+        </div>
+        <div class="field">
+          <label class="field-label" for="travel-tag-start">Von</label>
+          <input id="travel-tag-start" type="date">
+        </div>
+        <div class="field">
+          <label class="field-label" for="travel-tag-end">Bis</label>
+          <input id="travel-tag-end" type="date">
+        </div>
+        <button id="apply-travel-tag-btn" class="btn btn-primary" type="button">Buchungen taggen</button>
+      </div>
+      <p id="travel-tag-result" class="travel-tag-result hidden"></p>
     </div>
 
     <div class="section-head">
@@ -114,6 +151,7 @@
   </div>
 
   <script src="/sidebar.js"></script>
+  <script src="/charts.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

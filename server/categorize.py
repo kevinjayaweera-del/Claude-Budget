@@ -10,10 +10,33 @@ CONFIDENCE_THRESHOLD = 0.75
 # TWINT payment (e.g. "TWINT: SBB MOBILE BERN") would overwrite the generic
 # person-to-person-transfer rule that other merchant-specific keywords are
 # deliberately designed to outrank by length.
+#
+# The city/country names and address fragments below were added after a
+# real-data audit found _extract_keyword() (see below) had silently learned
+# several of them as "keywords" — e.g. a single correction on some Zürich
+# restaurant taught it "zuerich" (the longest word in that description),
+# which then outranked the real "salaer"/"coop"/"migros" keywords on every
+# OTHER transaction whose address happens to be in Zürich, including salary
+# credits and grocery purchases. A statement's merchant address will almost
+# always contain a city name — any of these being picked as "the" keyword
+# for one correction poisons every future transaction from that city. This
+# list isn't exhaustive; add a city/country/generic-address word here
+# whenever one is found to have been learned instead of a real merchant name
+# (see server/db.py's _fix_location_poisoned_rules for the one-off cleanup
+# this specific incident needed).
 STOPWORDS = {
     "einkauf", "online-einkauf", "belastung", "gutschrift", "zkb", "visa",
     "debit", "card", "karte", "mastercard", "mobile", "banking",
     "auftraggeber", "referenznummer", "twint",
+    "zuerich", "zurich", "geneve", "genf", "basel", "bern", "lausanne",
+    "winterthur", "luzern", "lugano", "biel", "thun", "affoltern",
+    "merenschwand", "waedenswil",
+    "frankfurt", "duesseldorf", "dusseldorf", "muenchen", "munchen",
+    "hamburg", "berlin", "london", "paris", "amsterdam", "wien",
+    "mailand", "milano",
+    "schweiz", "suisse", "svizzera", "deutschland", "frankreich",
+    "italien", "oesterreich", "vereinigte", "vereinigtes", "staaten",
+    "koenigreich", "postfach", "(suisse)",
 }
 
 
@@ -33,7 +56,13 @@ def _extract_keyword(normalized_description):
     words = []
     for raw_word in normalized_description.split():
         word = raw_word.strip(":,.;!?*/")
-        if len(word) > 3 and word not in STOPWORDS:
+        # A purely numeric token is always a masked postal code, reference
+        # number, or similar placeholder — never a real merchant identifier
+        # — regardless of its specific value, so this is a general check
+        # rather than yet another literal STOPWORDS entry (found via the
+        # same real-data audit: "00000" had been learned as a 157-hit
+        # "keyword" this way).
+        if len(word) > 3 and word not in STOPWORDS and not word.isdigit():
             words.append(word)
     if not words:
         return ""
@@ -66,15 +95,30 @@ class RuleBasedCategorizer:
                 return rule["category_id"], confidence, rule["id"]
         return self._uncategorized_id(), 0.0, None
 
-    def learn(self, description, category_id, was_correction=False):
+    def learn(self, description, category_id, was_correction=False, exclude_keyword=None):
         # was_correction is accepted but unused by this implementation (the
         # upsert's CASE WHEN already infers "did the target category change"
         # from the data itself) — kept on the interface per the spec's
         # ML-ready design, so a future implementation that wants to weight
         # corrections differently from fresh assignments can use it.
+        #
+        # exclude_keyword: the keyword of the rule that led to the
+        # suggestion being corrected away from, if any. A real-data audit
+        # found that when _extract_keyword() happens to land on that exact
+        # same keyword (e.g. correcting one "Migros Zürich" purchase to a
+        # different category, where "zuerich" used to always win as the
+        # longest word — now that it's a stopword, "migros" itself would be
+        # extracted instead), this upsert would instantly retarget the
+        # *entire* rule to the new category based on a single correction,
+        # immediately undoing the correction_count penalty the caller just
+        # applied moments earlier and making every future Migros purchase
+        # miscategorized too. One correction on one transaction should never
+        # be able to silently repurpose an established keyword this way.
         normalized = normalize_description(description)
         keyword = _extract_keyword(normalized)
         if not keyword:
+            return
+        if exclude_keyword is not None and keyword == normalize_description(exclude_keyword):
             return
         self._conn.execute(
             "INSERT INTO category_rules "

@@ -59,6 +59,7 @@ merchants = {
     "Bargeldbezug": ["Bancomat ZKB"],
     "Privatüberweisungen": ["Twint an Freund"],
     "Sparen/Anlegen": ["Sparplan ETF"],
+    "Sport/Fahrrad": ["Canyon", "Velofactory AG", "Ochsner Sport"],
 }
 
 today = date(2026, 7, 10)

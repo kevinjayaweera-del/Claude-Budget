@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 
+from server.categorize import RuleBasedCategorizer
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS imported_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,6 +106,7 @@ MIGRATIONS = [
     ("categories", "excluded_from_totals", "INTEGER NOT NULL DEFAULT 0"),
     ("transactions", "account_id", "INTEGER REFERENCES accounts(id)"),
     ("pending_transactions", "account_id", "INTEGER REFERENCES accounts(id)"),
+    ("categories", "is_hidden", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # Categories seeded with excluded_from_totals=1 — money movement that isn't
@@ -112,6 +115,15 @@ MIGRATIONS = [
 # there's no UI to toggle this per-category; it's a fixed property of what
 # the category represents, not a per-transaction user choice.
 CATEGORIES_EXCLUDED_FROM_TOTALS = {"Kreditkarten-Ausgleich"}
+
+# Categories seeded with is_hidden=1 — matching transactions skip the
+# pending-review queue entirely (see import_service.scan_and_parse) and are
+# filtered out of every listing/summary endpoint by default (see
+# server/app.py's _fetch_filtered_transactions), unlike
+# excluded_from_totals categories, which still show up in the ledger and
+# only drop out of aggregate sums. Re-asserted idempotently, same reasoning
+# as CATEGORIES_EXCLUDED_FROM_TOTALS above.
+CATEGORIES_HIDDEN = {"Versteckt"}
 
 # Derived from Kevin's real ZKB bank statements (CSV/PDF) and Swisscard/
 # Cornercard credit card statements — see docs/superpowers/specs for the
@@ -122,7 +134,7 @@ DEFAULT_CATEGORIES = [
     "Miete/Wohnen", "Versicherungen", "Gesundheit", "Shopping", "Abos",
     "Freizeit", "Hobby", "Bargeldbezug", "Privatüberweisungen",
     "Sparen/Anlegen", "Lohn/Einkommen", "Steuern", "Sonstiges",
-    "Kreditkarten-Ausgleich", "Unkategorisiert",
+    "Kreditkarten-Ausgleich", "Versteckt", "Unkategorisiert",
 ]
 
 # Grouped by category so maintenance means "find the category, add a
@@ -168,6 +180,25 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # newsstand/convenience chain, both "kkiosk" and "k kiosk" spellings
         # seen) are well-known chains not yet covered.
         "tegut", "aldi", "kkiosk", "k kiosk",
+        # Sixth pass: a general keyword-coverage expansion using well-known
+        # Swiss/international brand names and multi-language terms rather
+        # than statement-mined ones — see server/db.py's module docstring
+        # note above DEFAULT_CATEGORY_KEYWORD_GROUPS. Manor's grocery
+        # department ("Manor Food") is kept longer/more specific than the
+        # bare "manor" department-store keyword in Shopping below, so a
+        # Manor Food receipt still wins Lebensmittel over the shorter
+        # Shopping catch-all. Gas-station convenience shops (Migrolino,
+        # Coop Pronto) are grocery/snack purchases, not fuel, so they
+        # belong here rather than "Auto" — but "coop pronto tankstelle" is
+        # kept as a longer, more specific override in Auto below, so a
+        # purchase explicitly at the fuel pump still wins there. "avec"
+        # (the Coop-affiliated convenience-store chain) was deliberately
+        # dropped after a real-data regression check: it's also the plain
+        # French word "with" and false-matched an unrelated company
+        # ("Fais Avec GmbH") — no safe unambiguous form of this brand name
+        # was found short enough to be worth keeping.
+        "manor food", "migrolino", "coop pronto", "otto's", "ottos",
+        "landi", "denner satellit",
     ],
     "Restaurants/Ausgang": [
         # Generic dining-out words — catch any vendor that doesn't match a
@@ -232,6 +263,14 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # above doesn't match. "marcos" recurs as a Frankfurt restaurant
         # across both the ZKB and Swisscard statements.
         "marche take away", "marcos",
+        # Sixth pass: generic multi-language dining-out terms (French/
+        # Italian, folded via normalize_description's accent map — see
+        # "hopital"/"pathe" in Gesundheit/Freizeit below for the same
+        # pattern) and well-known chains not yet covered.
+        "boulangerie", "brasserie", "bistro", "trattoria", "pizzeria",
+        "kebab", "doener", "sushi",
+        "tibits", "hiltl", "holy cow", "coffee fellows", "five guys",
+        "deliveroo", "smood", "eat.ch",
     ],
     # Getting around WITHOUT owning/driving a personal car — public transit,
     # taxis, and shared micro-mobility rentals. See "Auto" below for the
@@ -255,6 +294,16 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # existing "taxifahrt" — a taxi company's own name (e.g. "Taxi
         # Asmat") doesn't contain that word at all.
         "taxi",
+        # Sixth pass: public-transit operators (regional/municipal), long-
+        # distance coach/rail alternatives, and shared-mobility brands not
+        # yet covered. "mobility carsharing"/"tier scooter"/"voi scooter"
+        # kept as the fuller phrase rather than the bare brand name — each
+        # is also an unrelated common word/company on its own ("mobility"
+        # overlaps conceptually with "die mobiliar" the insurer in
+        # Versicherungen, "tier" is German for "animal", "voi" is too short
+        # to safely stand alone).
+        "postauto", "vbz", "swisspass", "flixbus", "flixtrain", "publibike",
+        "mobility carsharing", "tier scooter", "voi scooter", "limebike",
     ],
     # Costs of owning/operating Kevin's own car — fuel, parking, tolls,
     # leasing, registration/road tax, and repairs. Split out of "Transport"
@@ -277,6 +326,32 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # keyword ("Garage" reliably means a car workshop in Swiss usage,
         # not a building attached to a house).
         "strassenverkehrsamt", "garage",
+        # Sixth pass: "parking" itself was missing — only the specific
+        # "parkingpay"/"parkhaus"/"parkdepot" vendor names existed, so a
+        # plain "Parking" line (a very common statement text) fell through
+        # to manual review. Added as a generic catch-all plus its common
+        # synonyms/multi-language variants (French "parcage", Italian
+        # "parcheggio") and abbreviations, so any parking charge is
+        # recognized regardless of which specific operator printed it.
+        "parking", "parkplatz", "parking fee", "p+r", "car park",
+        "parking ticket", "parcage", "parcheggio",
+        # More fuel-station brands beyond the ones already mined from real
+        # statements (Shell, Socar, Avia, Agrola).
+        "esso", "migrol", "tamoil",
+        # Swiss/Austrian highway toll sticker, a car-repair chain, a tire
+        # shop, and the Touring Club Suisse (kept as the full name rather
+        # than the 3-letter "tcs" abbreviation, which risks matching inside
+        # unrelated text).
+        "vignette", "midas", "pneuhaus", "touring club",
+        # Longer, more specific overrides found via a real-data regression
+        # check after the "coop pronto"/"coop city" keywords were added to
+        # Lebensmittel/Shopping above: those brand names are also the
+        # location a parking garage or fuel pump happens to be attached to,
+        # and (being longer than bare "parking"/"tankstell") would
+        # otherwise win and misfile an actual parking/fuel charge as a
+        # grocery/shopping purchase. These compound phrases are longer
+        # still, so they correctly take priority for exactly that case.
+        "coop pronto tankstelle", "parking coop city",
     ],
     "Reisen": [
         "swiss intl air lines",
@@ -291,6 +366,16 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # sites, and a Frankfurt museum-district visit (Kevin travels there
         # regularly per other Reisen/Frankfurt entries elsewhere).
         "lufthansa", "rentalcars", "sunnycars", "frankfurtmuseumsufer",
+        # Sixth pass: more airlines, hotel chains, car-rental counters (car
+        # rental is travel-related, unlike "Auto" above which is
+        # specifically about operating Kevin's own car), and booking
+        # platforms/travel agencies.
+        "ryanair", "wizz air", "eurowings", "klm", "air france",
+        "british airways", "qatar airways",
+        "novotel", "motel one",
+        "europcar", "hertz", "sixt", "avis rent a car",
+        "booking.com", "trivago", "kayak", "skyscanner", "expedia",
+        "interrail", "tui",
     ],
     "Versicherungen": [
         "ökk",
@@ -313,6 +398,22 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # Third real-data mining pass: one of Switzerland's largest general
         # insurers, not yet covered.
         "allianz suisse",
+        # Sixth pass: the rest of Switzerland's major health insurers (CSS,
+        # Swica, Sanitas, Concordia, Visana, Groupe Mutuel, Assura, Sympany,
+        # Atupri — together with the existing ÖKK/Helsana/Innova, this
+        # covers the large majority of the ~40-insurer market) and general
+        # insurers (Generali, Baloise, Vaudoise, Zurich). "css versicherung"
+        # kept as the fuller phrase rather than the bare 3-letter "css",
+        # which risks matching inside unrelated text. A generic
+        # multi-language fallback ("versicherung" bare, French
+        # "assurance", Italian "assicurazione") catches any insurer not
+        # individually listed — safe as a fallback since every
+        # already-listed insurer's keyword above is longer and so still
+        # wins first (categorize() prefers the longest match).
+        "css versicherung", "swica", "sanitas", "concordia", "visana",
+        "groupe mutuel", "assura", "sympany", "atupri",
+        "generali", "baloise", "vaudoise", "zurich versicherung",
+        "versicherung", "assurance", "assicurazione",
     ],
     "Gesundheit": [
         "apotheke",
@@ -341,6 +442,22 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # closest fit here since there's no dedicated pet-care category) and
         # an optician chain, consistent with "fielmann" above.
         "tierarztpraxis", "foto-optik",
+        # Sixth pass: multi-language generic terms (French/Italian pharmacy,
+        # hospital, clinic — "hopital"/"clinique" fold from
+        # "hôpital"/"clinique" via normalize_description's accent map) and
+        # well-known Swiss pharmacy/optician chains. NOT a bare "spital":
+        # tried first, but it false-matched inside the unrelated English
+        # word "Hospitality" (real-data regression check: "Weisse Arena
+        # Hospitality" contains "ho-SPITAL-ity" as a literal substring) — a
+        # trailing space doesn't help either, since normalize_description()
+        # strips it off both the incoming text AND the stored keyword
+        # before comparing. Using the specific compound forms below instead
+        # (cantonal/university/city hospitals) avoids the collision while
+        # still covering most major Swiss hospitals by name.
+        "pharmacie", "farmacia", "kantonsspital", "universitatsspital",
+        "inselspital", "hopital", "ospedale", "klinik",
+        "clinique", "clinica", "arztpraxis", "hausarzt",
+        "coop vitality", "topwell", "sunstore", "visilab",
     ],
     "Shopping": [
         "zalando", "digitec galaxus", "galaxus mobile", "media markt",
@@ -383,6 +500,15 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # distinct from the existing "amzn" abbreviation above, which
         # doesn't match this format.
         "amazon",
+        # Sixth pass: well-known Swiss/international retail chains and
+        # online marketplaces not yet covered. "manor" (bare, department
+        # store) is deliberately shorter than "manor food" in Lebensmittel
+        # above, so a Manor Food grocery receipt still wins that category —
+        # this bare keyword only catches other Manor departments.
+        "manor", "globus", "coop city", "conforama", "micasa", "interio",
+        "pfister", "decathlon", "intersport", "bauhaus", "jumbo",
+        "temu", "shein", "aliexpress", "asos",
+        "fust", "interdiscount", "microspot", "apple store",
     ],
     "Abos": [
         "spotify", "netflix", "apple.com/bill",
@@ -391,11 +517,23 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # plain "digitec galaxus"/"galaxus mobile" one-off purchases above
         # (Shopping).
         "galaxus abos",
-        # Second real-data mining pass: a fitness-tracker subscription and
-        # a content-subscription platform.
-        "whoop", "onlyfans",
+        # Second real-data mining pass: a fitness-tracker subscription.
+        # ("onlyfans" used to live here too — moved to the dedicated
+        # "Versteckt" category below, fifth pass.)
+        "whoop",
         # Third real-data mining pass: common software subscriptions.
         "adobe", "microsoft",
+        # Sixth pass: streaming/telecom subscriptions and other recurring
+        # digital services not yet covered. "amazon prime" kept longer/more
+        # specific than the bare "amazon" keyword in Shopping above, so a
+        # Prime subscription charge still wins Abos over a one-off Amazon
+        # purchase. Telecom providers land here (not a dedicated category)
+        # for consistency with the existing "salt mobile" entry — a phone/
+        # internet plan is a recurring subscription like the others.
+        "disneyplus", "disney+", "dazn", "wilmaa", "teleboy",
+        "icloud", "google one", "nordvpn", "expressvpn", "audible",
+        "amazon prime",
+        "swisscom", "sunrise", "quickline", "init7", "wingo", "yallo",
     ],
     # General leisure/social activities — day trips, wellness, entertainment
     # venues. See "Hobby" below for the complementary "an ongoing personal
@@ -416,6 +554,12 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # and a recurring yoga-studio membership.
         "stockhornbahn", "zurichsee-fahre", "arena cinemas", "cinema 8",
         "deinyogaweg",
+        # Sixth pass: cinemas, gyms/wellness, and entertainment venues.
+        # "pathe" folds from "Pathé" via normalize_description's accent map.
+        "kino", "cinema", "pathe", "kitag",
+        "activ fitness", "fitnesspark", "hallenbad", "schwimmbad",
+        "minigolf", "bowling", "europa park", "conny land", "museum",
+        "ticketcorner", "starticket", "eventfrog",
     ],
     # A specific ongoing pursuit with its own recurring subscriptions
     # and/or one-off gear purchases — gaming and flight simulation so far.
@@ -428,15 +572,26 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
     "Hobby": [
         "steamgames", "playstation network", "spinibuilds", "inibuilds",
         "sayintentions", "navigraph",
+        # Sixth pass: other gaming platforms/storefronts and subscriptions.
+        # "playstation" (bare) is deliberately shorter than "playstation
+        # network" above, so that more specific keyword still wins first.
+        "epic games", "playstation", "xbox", "nintendo", "twitch",
+        "discord nitro", "battle.net", "riot games", "ea play", "ubisoft",
     ],
     "Bargeldbezug": [
         "bezug zkb visa debit card",
+        # Sixth pass: generic multi-language ATM/cash-withdrawal terms, for
+        # accounts/cards other than the ZKB Visa Debit one above.
+        "bancomat", "geldautomat", "distributeur", "auszahlung", "retrait",
     ],
     "Sparen/Anlegen": [
         "findependent",
         # ZKB's own pillar-3a app; the risk-strategy fund name appears in
         # the statement text ("Frankly Risky").
         "frankly",
+        # Sixth pass: other well-known Swiss pillar-3a/investing platforms.
+        "viac", "finpension", "swissquote", "selma finance",
+        "descartes finance", "truewealth", "vontobel", "postfinance fonds",
     ],
     "Miete/Wohnen": [
         "barth real ag", "otto markwalder", "elektrizitaetswerke",
@@ -446,6 +601,11 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # rather than folding, since the stored description text is
         # itself truncated at this point.
         "miteigentumergemeinschaf",
+        # Sixth pass: major Swiss property-management companies, generic
+        # rent/utility terms, and multi-language rent synonyms.
+        "hausverwaltung", "wincasa", "privera", "livit",
+        "mietzins", "nebenkosten", "kautionskonto",
+        "loyer", "affitto",
     ],
     # Both sides of the "pay off the credit card bill from the checking
     # account" event: the credit-card statement's own payment-received
@@ -500,6 +660,9 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # category, fourth pass, instead of landing here first — it's
         # specifically about owning a car, not a general government fee.)
         "serafe",
+        # Sixth pass: generic bank-fee terms not covered by the specific
+        # "zahlungsverkehrspreise" line above.
+        "kontofuehrung", "kartengebuehr",
     ],
     # Fourth pass: cantonal/federal tax obligations, split out of the
     # generic "Sonstiges" bucket now that there's a dedicated home for
@@ -508,11 +671,20 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
     # already owed, not a purchase or transfer.
     "Steuern": [
         "steuerbezug",
+        # Sixth pass: generic tax-authority/tax-type terms and their French/
+        # Italian equivalents. "tasse" (Italian "taxes") is deliberately
+        # NOT included — it's also the German word for "cup" ("Tasse"),
+        # e.g. inside "Kaffeetasse", and would misfire there.
+        "steueramt", "kantonssteueramt", "quellensteuer", "mwst",
+        "steuerverwaltung", "impot", "imposta",
     ],
     "Lohn/Einkommen": [
         # Any "Gutschrift Salär: <employer>" line, regardless of employer
         # — one general keyword instead of one entry per employer name.
         "salaer",
+        # Sixth pass: generic salary/bonus terms, including the French
+        # equivalent of "Salär".
+        "salaire", "lohn", "gehalt", "gratifikation",
     ],
     "Privatüberweisungen": [
         # Recurring transfers to/from family, identified by name as they
@@ -552,6 +724,16 @@ DEFAULT_CATEGORY_KEYWORD_GROUPS = {
         # transfers like "TWINT: SCHWARTZ, PATRICK +4176..." that have no
         # merchant-specific rule.
         "twint",
+        # Sixth pass: generic French/Italian terms for a bank transfer.
+        "virement", "bonifico",
+    ],
+    # Fifth pass: sensitive/private bookings Kevin wants excluded from the
+    # import review queue and every ledger/dashboard view entirely, not just
+    # sorted into a category (see CATEGORIES_HIDDEN + import_service.py).
+    # "onlyfans" moved here from "Abos", where it used to just be a regular
+    # subscription line.
+    "Versteckt": [
+        "onlyfans",
     ],
 }
 
@@ -591,6 +773,10 @@ def init_db(db_path):
     for name in CATEGORIES_EXCLUDED_FROM_TOTALS:
         conn.execute(
             "UPDATE categories SET excluded_from_totals = 1 WHERE name = ?", (name,)
+        )
+    for name in CATEGORIES_HIDDEN:
+        conn.execute(
+            "UPDATE categories SET is_hidden = 1 WHERE name = ?", (name,)
         )
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
@@ -677,7 +863,39 @@ def init_db(db_path):
             "WHERE keyword = ? AND category_id = ?",
             (new_category_id, keyword, old_category_id),
         )
+    # Fifth pass: "onlyfans" moved from "Abos" to the new hidden "Versteckt"
+    # category (see CATEGORIES_HIDDEN). Same "already seeded under an old
+    # category" retarget as above, plus — unlike a plain re-categorization —
+    # this one also needs to move any transaction that was already imported
+    # under the old rule, since the whole point of "Versteckt" is that
+    # matching transactions never appear in the ledger/dashboard at all.
+    # manually_corrected = 0 guard: never override a deliberate manual
+    # re-categorization Kevin already made away from Abos, same reasoning as
+    # every other retarget in this function not touching manual corrections.
+    abos_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Abos'"
+    ).fetchone()["id"]
+    versteckt_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Versteckt'"
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE category_rules SET category_id = ? "
+        "WHERE keyword = 'onlyfans' AND category_id = ?",
+        (versteckt_id, abos_id),
+    )
+    conn.execute(
+        "UPDATE transactions SET category_id = ? "
+        "WHERE category_id = ? AND manually_corrected = 0 "
+        "AND LOWER(description) LIKE '%onlyfans%'",
+        (versteckt_id, abos_id),
+    )
+    conn.execute(
+        "UPDATE pending_transactions SET category_id = ? "
+        "WHERE category_id = ? AND LOWER(description) LIKE '%onlyfans%'",
+        (versteckt_id, abos_id),
+    )
     _backfill_accounts(conn)
+    _fix_location_poisoned_rules(conn)
     conn.commit()
     return conn
 
@@ -718,6 +936,84 @@ def _backfill_accounts(conn):
                 f"UPDATE {table} SET account_id = ? WHERE source = ? AND account_id IS NULL",
                 (account_id, source),
             )
+
+
+# One-off cleanup for a real incident found via a real-data audit: before
+# STOPWORDS (see server/categorize.py) was hardened against place names and
+# numeric placeholders, RuleBasedCategorizer.learn() had already picked up
+# several of them as "keywords" from earlier corrections — e.g. "zuerich"
+# (92 hits, Restaurants/Ausgang) outranked the real "salaer"/"coop"/"migros"
+# rules on every transaction whose address happens to be in Zürich,
+# including salary credits and grocery purchases. This list is exactly the
+# set found poisoned in that audit — not meant to be extended going
+# forward; STOPWORDS now prevents new instances of this at the source.
+_LOCATION_POISONED_KEYWORDS = {
+    "00000", "zuerich", "zurich", "affoltern", "merenschwand", "vereinigtes",
+    "duesseldorf", "dusseldorf", "frankfurt", "postfach", "waedenswil",
+    "60327", "(suisse)",
+}
+
+
+def _fix_location_poisoned_rules(conn):
+    """Deletes the poisoned rules above and re-categorizes any
+    already-imported transaction currently sitting under one of them — but
+    only if it's still exactly what the (still-poisoned) rule set would
+    predict for it right now, so a transaction Kevin has since corrected by
+    hand (manually_corrected=1), or that reassigning has already moved onto
+    some other rule, is left untouched. Naturally idempotent: once the
+    poisoned rows are gone, the keyword lookup below finds nothing and the
+    function returns immediately on every later init_db() call."""
+    placeholders = ",".join("?" for _ in _LOCATION_POISONED_KEYWORDS)
+    poisoned_rule_ids = {
+        row["id"] for row in conn.execute(
+            f"SELECT id FROM category_rules WHERE keyword IN ({placeholders})",
+            tuple(_LOCATION_POISONED_KEYWORDS),
+        )
+    }
+    if not poisoned_rule_ids:
+        return
+
+    categorizer = RuleBasedCategorizer(conn)
+    affected_transaction_ids = []
+    for row in conn.execute(
+        "SELECT id, description, category_id FROM transactions WHERE manually_corrected = 0"
+    ):
+        predicted_category_id, _, rule_id = categorizer.predict(row["description"])
+        if rule_id in poisoned_rule_ids and predicted_category_id == row["category_id"]:
+            affected_transaction_ids.append(row["id"])
+
+    # pending_transactions.suggested_rule_id has a foreign-key reference to
+    # category_rules(id) with no ON DELETE clause — fetch (and re-predict)
+    # any row using a poisoned rule *before* the DELETE below, or the
+    # DELETE would fail with a foreign-key-constraint error.
+    pending_placeholders = ",".join("?" for _ in poisoned_rule_ids)
+    pending_rows = conn.execute(
+        f"SELECT id, description FROM pending_transactions WHERE suggested_rule_id IN ({pending_placeholders})",
+        tuple(poisoned_rule_ids),
+    ).fetchall()
+
+    conn.execute(
+        f"DELETE FROM category_rules WHERE keyword IN ({placeholders})",
+        tuple(_LOCATION_POISONED_KEYWORDS),
+    )
+
+    for row in pending_rows:
+        category_id, confidence, rule_id = categorizer.predict(row["description"])
+        conn.execute(
+            "UPDATE pending_transactions SET category_id = ?, suggested_category_id = ?, "
+            "suggested_rule_id = ?, category_confidence = ? WHERE id = ?",
+            (category_id, category_id, rule_id, confidence if rule_id is not None else None, row["id"]),
+        )
+
+    for txn_id in affected_transaction_ids:
+        description = conn.execute(
+            "SELECT description FROM transactions WHERE id = ?", (txn_id,)
+        ).fetchone()["description"]
+        new_category_id, _, _ = categorizer.predict(description)
+        conn.execute(
+            "UPDATE transactions SET category_id = ? WHERE id = ?",
+            (new_category_id, txn_id),
+        )
 
 
 def reset_db(db_path):

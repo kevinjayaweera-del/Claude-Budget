@@ -109,3 +109,22 @@ def test_filter_transactions_by_account_id(client, tmp_path):
 
     assert len(filtered) == 1
     assert filtered[0]["description"] == "Migros Zürich"
+
+
+def test_filter_transactions_by_multiple_account_ids(client, tmp_path):
+    _scan_one_file(client, tmp_path, "ZKB")
+    (tmp_path / "statements" / "Cornercard").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "statements" / "Cornercard" / "cc.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n02.03.2026;Restaurant Zuerich;-30.00;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    client.post("/api/import/confirm")
+    accounts = {a["name"]: a["id"] for a in client.get("/api/accounts").get_json()}
+
+    # Comma-separated account_id is the Budget tab's multi-select filter —
+    # a transaction from EITHER selected account should match (OR, not AND).
+    filtered = client.get(f"/api/transactions?account_id={accounts['ZKB']},{accounts['Cornercard']}").get_json()
+
+    descriptions = {r["description"] for r in filtered}
+    assert descriptions == {"Migros Zürich", "Restaurant Zuerich"}

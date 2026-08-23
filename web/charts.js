@@ -114,7 +114,14 @@ function renderChart(container, config) {
     data,
     series,
     width = container.clientWidth || 600,
-    height = 260,
+    // A flat 260px regardless of the widget's actual size left a "lg"/
+    // "full" widget mostly empty (a wide chart squashed into a short box)
+    // and made dense data look cramped — scale with the real rendered
+    // width instead, within a floor/ceiling that keeps small widgets from
+    // going too short and huge ones from turning into an odd, over-tall
+    // shape. Cartesian charts only; _drawPie below has its own sizing
+    // (a donut/pie's height is its diameter, not a proportional strip).
+    height = Math.round(Math.min(Math.max(width * 0.44, 300), 480)),
     formatValue = _defaultFormatValue,
     formatX = (x) => String(x),
     stacked = false,
@@ -304,19 +311,51 @@ function _drawCartesian(data, series, opts) {
   `;
   const svg = wrap.firstElementChild;
 
+  // Maps a mouse position to the nearest data index, in the same
+  // coordinate space xForIndex()/band above already use — lets hovering
+  // ANYWHERE over a bar's column (not just its thin top edge) or near a
+  // line point (not just its 4px-radius circle) resolve to that period.
+  function indexForClientX(clientX) {
+    if (data.length === 0) return null;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0) return null;
+    const scale = width / rect.width;
+    const localX = (clientX - rect.left) * scale - CHART_PADDING.left;
+    if (localX < 0 || localX > innerW) return null;
+    if (data.length === 1) return 0;
+    const raw = type === "line" || type === "area"
+      ? (localX / innerW) * (data.length - 1)
+      : localX / band.step;
+    return Math.max(0, Math.min(data.length - 1, Math.round(raw)));
+  }
+
   svg.addEventListener("mousemove", (event) => {
     const mark = event.target.closest(".chart-mark");
-    if (!mark) { _hideTooltip(); return; }
-    const seriesKey = mark.dataset.seriesKey;
-    const index = parseInt(mark.dataset.index, 10);
-    const s = series.find((x) => x.key === seriesKey);
-    const d = data[index];
-    if (!s || !d) return;
-    _showTooltip(
-      `<div class="chart-tooltip-label">${_escapeHtml(formatX(d.x))}</div>` +
-      `<div class="chart-tooltip-row"><span class="chart-tooltip-dot" style="background:${s.color}"></span>${_escapeHtml(s.label)}: <strong>${formatValue(d[s.key] || 0)}</strong></div>`,
-      event.clientX, event.clientY
-    );
+    if (mark) {
+      // Hovering a specific mark directly — tooltip for just that series.
+      const seriesKey = mark.dataset.seriesKey;
+      const index = parseInt(mark.dataset.index, 10);
+      const s = series.find((x) => x.key === seriesKey);
+      const d = data[index];
+      if (!s || !d) { _hideTooltip(); return; }
+      _showTooltip(
+        `<div class="chart-tooltip-label">${_escapeHtml(formatX(d.x))}</div>` +
+        `<div class="chart-tooltip-row"><span class="chart-tooltip-dot" style="background:${s.color}"></span>${_escapeHtml(s.label)}: <strong>${formatValue(d[s.key] || 0)}</strong></div>`,
+        event.clientX, event.clientY
+      );
+      return;
+    }
+    // Not directly on a mark's own (small) hit area — fall back to the
+    // nearest period by cursor position and show every visible series for
+    // it, so hovering anywhere over a bar's column (including the gap
+    // above a short bar) or near a line still surfaces the numbers.
+    const index = indexForClientX(event.clientX);
+    const d = index === null ? null : data[index];
+    if (!d) { _hideTooltip(); return; }
+    const rows = series.map((s) =>
+      `<div class="chart-tooltip-row"><span class="chart-tooltip-dot" style="background:${s.color}"></span>${_escapeHtml(s.label)}: <strong>${formatValue(d[s.key] || 0)}</strong></div>`
+    ).join("");
+    _showTooltip(`<div class="chart-tooltip-label">${_escapeHtml(formatX(d.x))}</div>${rows}`, event.clientX, event.clientY);
   });
   svg.addEventListener("mouseleave", _hideTooltip);
   svg.addEventListener("click", (event) => {

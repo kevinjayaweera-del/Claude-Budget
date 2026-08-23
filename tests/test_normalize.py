@@ -28,3 +28,9 @@ def test_normalize_strips_reference_number():
 
 def test_normalize_collapses_whitespace():
     assert normalize_description("Migros   Zürich  ") == "migros zuerich"
+
+
+def test_normalize_folds_french_and_italian_accents():
+    assert normalize_description("Pathé Genève") == "pathe geneve"
+    assert normalize_description("Hôpital de La Tour") == "hopital de la tour"
+    assert normalize_description("Ospedale Città") == "ospedale citta"
