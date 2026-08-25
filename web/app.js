@@ -203,7 +203,13 @@ async function loadTransactions() {
           ${assignableTags.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("")}
         </select>`
       : "";
-    const categoryOptions = categories.map((c) => `
+    // Hidden categories (e.g. "Versteckt") are excluded from this picker —
+    // see the matching note in import.js — except the row's own current
+    // category, which stays selectable so the dropdown never silently
+    // shows the wrong thing.
+    const categoryOptions = categories
+      .filter((c) => !c.is_hidden || c.id === row.category_id)
+      .map((c) => `
       <option value="${c.id}" ${c.id === row.category_id ? "selected" : ""}>${escapeHtml(c.name)}</option>
     `).join("");
     tr.dataset.transactionId = row.id;

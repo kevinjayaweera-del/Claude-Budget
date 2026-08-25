@@ -114,7 +114,16 @@ async function loadPending() {
     const tr = document.createElement("tr");
     tr.dataset.id = row.id;
     tr.dataset.currency = row.currency;
+    // Hidden categories (e.g. "Versteckt") are excluded from this picker —
+    // they're meant to be assigned automatically by a matching rule, not
+    // picked casually during review; doing so here made the row vanish
+    // from every default view (ledger, dashboard) with no obvious reason
+    // why. The row's own CURRENT category stays selectable even if hidden
+    // (shouldn't normally happen — import_service.py routes hidden-rule
+    // matches straight into transactions, bypassing pending review
+    // entirely — but this keeps the dropdown honest if it ever does).
     const categoryOptions = categories
+      .filter((c) => !c.is_hidden || c.id === row.category_id)
       .map((c) => `<option value="${c.id}" ${c.id === row.category_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
       .join("");
     const currencyTag = row.currency && row.currency !== "CHF"
@@ -172,61 +181,80 @@ async function savePendingRow(tr) {
 }
 
 function showScanStatus(newPending, duplicatesSkipped) {
-  // Deliberately says "importiert", not "zur Prüfung" — newPending is every
-  // row the scan just created, most of which loadPending() (called right
-  // after this) will silently auto-accept without a manual look. Claiming
-  // all of them need review here duplicated the exact bug the badge below
-  // already had: a number bigger than what's actually in the review table.
+  // Deliberately says "gefunden", not "importiert" or "zur Prüfung":
+  // "importiert" would claim these rows are already committed to the
+  // ledger, when at this point they've only been parsed and staged into
+  // pending_transactions — "Import bestätigen" (see the confirm-status
+  // message further down, which correctly says "importiert" because that
+  // IS the step that commits them) hasn't happened yet. "zur Prüfung"
+  // would overclaim in the other direction — newPending is every row the
+  // scan just created, most of which loadPending() (called right after
+  // this) will silently auto-accept without a manual look.
   const status = document.getElementById("scan-status");
   if (newPending === 0 && duplicatesSkipped === 0) {
     status.textContent = "Keine neuen Dateien gefunden.";
   } else if (newPending === 0 && duplicatesSkipped > 0) {
     status.textContent = `Alle ${duplicatesSkipped} gefundenen Buchungen sind bereits vorhanden — keine neuen Buchungen.`;
   } else if (duplicatesSkipped > 0) {
-    status.textContent = `${duplicatesSkipped} Dopplungen übersprungen, ${newPending} neue Buchungen importiert.`;
+    status.textContent = `${duplicatesSkipped} Dopplungen übersprungen, ${newPending} neue Buchungen gefunden.`;
   } else {
-    status.textContent = `${newPending} neue Buchungen importiert.`;
+    status.textContent = `${newPending} neue Buchungen gefunden.`;
   }
   status.classList.remove("hidden");
 }
 
-document.getElementById("scan-btn").addEventListener("click", async () => {
-  // Fail-safe against duplicate imports: preview what a scan would do
-  // (dry_run=true writes nothing) so we can warn before anything lands in
-  // the pending queue. Only worth asking when there's an actual choice —
-  // some new bookings AND some duplicates — otherwise just proceed (a
-  // scan that's either all-new or all-duplicate has nothing to decide).
-  const previewRes = await fetch("/api/scan?dry_run=true", { method: "POST" });
-  if (!previewRes.ok) {
-    alert("Fehler beim Scannen — bitte erneut versuchen.");
-    return;
-  }
-  const preview = await previewRes.json();
-
-  if (preview.duplicates_skipped > 0 && preview.new_pending > 0) {
-    const proceed = confirm(
-      `${preview.duplicates_skipped} Dopplung(en) gefunden, ${preview.new_pending} neue Buchung(en). ` +
-      "Import fortsetzen? Nur die neuen Buchungen werden importiert, Duplikate werden übersprungen."
-    );
-    if (!proceed) {
-      const status = document.getElementById("scan-status");
-      status.textContent = "Import abgebrochen — es wurde nichts importiert.";
-      status.classList.remove("hidden");
+document.getElementById("scan-btn").addEventListener("click", async (event) => {
+  // Guards against a double-click (or an impatient second click before the
+  // first request chain resolves) firing this whole multi-request flow a
+  // second time in parallel, which could duplicate-scan or produce a
+  // confusing second confirm() dialog on top of the first.
+  const btn = event.currentTarget;
+  if (btn.disabled) return;
+  btn.disabled = true;
+  try {
+    // Fail-safe against duplicate imports: preview what a scan would do
+    // (dry_run=true writes nothing) so we can warn before anything lands in
+    // the pending queue. Only worth asking when there's an actual choice —
+    // some new bookings AND some duplicates — otherwise just proceed (a
+    // scan that's either all-new or all-duplicate has nothing to decide).
+    const previewRes = await fetch("/api/scan?dry_run=true", { method: "POST" });
+    if (!previewRes.ok) {
+      alert("Fehler beim Scannen — bitte erneut versuchen.");
       return;
     }
-  }
+    const preview = await previewRes.json();
 
-  const res = await fetch("/api/scan", { method: "POST" });
-  if (!res.ok) {
-    alert("Fehler beim Scannen — bitte erneut versuchen.");
-    return;
+    if (preview.duplicates_skipped > 0 && preview.new_pending > 0) {
+      const proceed = confirm(
+        `${preview.duplicates_skipped} Dopplung(en) gefunden, ${preview.new_pending} neue Buchung(en). ` +
+        "Import fortsetzen? Nur die neuen Buchungen werden importiert, Duplikate werden übersprungen."
+      );
+      if (!proceed) {
+        const status = document.getElementById("scan-status");
+        status.textContent = "Import abgebrochen — es wurde nichts importiert.";
+        status.classList.remove("hidden");
+        return;
+      }
+    }
+
+    const res = await fetch("/api/scan", { method: "POST" });
+    if (!res.ok) {
+      alert("Fehler beim Scannen — bitte erneut versuchen.");
+      return;
+    }
+    const result = await res.json();
+    showScanStatus(result.new_pending, result.duplicates_skipped);
+    await loadPending();
+  } finally {
+    btn.disabled = false;
   }
-  const result = await res.json();
-  showScanStatus(result.new_pending, result.duplicates_skipped);
-  await loadPending();
 });
 
-document.getElementById("confirm-btn").addEventListener("click", async () => {
+document.getElementById("confirm-btn").addEventListener("click", async (event) => {
+  const btn = event.currentTarget;
+  if (btn.disabled) return;
+  btn.disabled = true;
+  try {
   const rows = document.querySelectorAll("#pending-table tbody tr");
   let allSaved = true;
   const ids = [...autoAcceptedPendingIds];
@@ -254,6 +282,9 @@ document.getElementById("confirm-btn").addEventListener("click", async () => {
   status.textContent = `${ids.length} Buchung(en) importiert.`;
   status.classList.remove("hidden");
   await loadPending();
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 (async function init() {
