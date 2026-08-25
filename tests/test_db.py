@@ -43,6 +43,55 @@ def test_init_db_is_idempotent(tmp_path):
     conn.close()
 
 
+def test_init_db_does_not_resurrect_a_renamed_default_category(tmp_path):
+    # Regression test for a critical bug found in the pre-release audit:
+    # init_db() used to seed defaults purely by INSERT OR IGNORE on `name`,
+    # so renaming a default category made the next init_db() call (e.g. an
+    # app restart) look exactly like that default had never been created —
+    # silently resurrecting a fresh, empty duplicate under the old name.
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    transport_id = conn.execute(
+        "SELECT id FROM categories WHERE name = 'Transport'"
+    ).fetchone()["id"]
+    conn.execute("UPDATE categories SET name = 'OeV & Taxi' WHERE id = ?", (transport_id,))
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)  # simulates an app restart
+
+    names = [row["name"] for row in conn.execute("SELECT name FROM categories")]
+    assert names.count("Transport") == 0
+    assert names.count("OeV & Taxi") == 1
+    # The renamed row keeps its original id/history — not swapped for a
+    # fresh one.
+    assert conn.execute(
+        "SELECT id FROM categories WHERE name = 'OeV & Taxi'"
+    ).fetchone()["id"] == transport_id
+    conn.close()
+
+
+def test_init_db_does_not_resurrect_a_deleted_default_category(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    hobby_id = conn.execute("SELECT id FROM categories WHERE name = 'Hobby'").fetchone()["id"]
+    # Mirrors what DELETE /api/categories/<id>?confirm=true does before
+    # deleting the row itself — reassign dependents so the FK constraint
+    # on category_rules.category_id doesn't block the delete.
+    conn.execute("UPDATE category_rules SET category_id = "
+                  "(SELECT id FROM categories WHERE name = 'Unkategorisiert') "
+                  "WHERE category_id = ?", (hobby_id,))
+    conn.execute("DELETE FROM categories WHERE id = ?", (hobby_id,))
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)  # simulates an app restart
+
+    names = {row["name"] for row in conn.execute("SELECT name FROM categories")}
+    assert "Hobby" not in names
+    conn.close()
+
+
 def test_init_db_seeds_default_category_rules(tmp_path):
     db_path = tmp_path / "test.db"
     conn = init_db(db_path)

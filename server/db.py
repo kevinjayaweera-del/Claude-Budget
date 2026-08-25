@@ -80,6 +80,18 @@ CREATE TABLE IF NOT EXISTS transaction_tags (
     tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (transaction_id, tag_id)
 );
+
+-- Tracks which of DEFAULT_CATEGORIES has ever been seeded, independent of
+-- whether that category still exists under its original name (or at all).
+-- Without this, init_db()'s "INSERT OR IGNORE ... WHERE name = ?" seeding
+-- looked up defaults purely by their current NAME — so renaming or
+-- deleting a default category (e.g. "Transport" -> "OeV & Taxi") made it
+-- look, to the next app start, exactly like a default that had never been
+-- created yet, silently resurrecting a fresh empty duplicate under the old
+-- name on every restart. See init_db() below.
+CREATE TABLE IF NOT EXISTS seeded_defaults (
+    key TEXT PRIMARY KEY
+);
 """
 
 # Stored as strings (settings.value is TEXT) and parsed by the API layer —
@@ -763,13 +775,38 @@ def _apply_migrations(conn):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
+def _category_id_by_name(conn, name):
+    row = conn.execute("SELECT id FROM categories WHERE name = ?", (name,)).fetchone()
+    return row["id"] if row else None
+
+
 def init_db(db_path):
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)
     conn.executescript(SCHEMA)
     _apply_migrations(conn)
     for name in DEFAULT_CATEGORIES:
-        conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (name,))
+        already_seeded = conn.execute(
+            "SELECT 1 FROM seeded_defaults WHERE key = ?", (name,)
+        ).fetchone()
+        if already_seeded:
+            # Already created once, on some earlier init_db() call — even if
+            # the user has since renamed or deleted it, that's a deliberate
+            # choice (see PUT/DELETE /api/categories) that must stick, not
+            # get silently undone on the next restart.
+            continue
+        # Never seeded before. A database migrating from before
+        # seeded_defaults existed may already have a same-named row (from
+        # the old plain "INSERT OR IGNORE ... name" seeding) — claim it
+        # instead of creating a duplicate; only a genuinely fresh database
+        # (or one where this default was already renamed/deleted before
+        # this fix shipped) falls through to actually inserting a new row.
+        existing_by_name = conn.execute(
+            "SELECT id FROM categories WHERE name = ?", (name,)
+        ).fetchone()
+        if existing_by_name is None:
+            conn.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+        conn.execute("INSERT OR IGNORE INTO seeded_defaults (key) VALUES (?)", (name,))
     for name in CATEGORIES_EXCLUDED_FROM_TOTALS:
         conn.execute(
             "UPDATE categories SET excluded_from_totals = 1 WHERE name = ?", (name,)
@@ -793,9 +830,16 @@ def init_db(db_path):
     # confirmed correct twice (match_count reaching 2, confidence 0.75)
     # before it's trusted enough to skip manual review.
     for keyword, category_name in DEFAULT_CATEGORY_RULES:
-        category_id = conn.execute(
-            "SELECT id FROM categories WHERE name = ?", (category_name,)
-        ).fetchone()["id"]
+        category_id = _category_id_by_name(conn, category_name)
+        if category_id is None:
+            # This default category has been renamed or deleted by the
+            # user (see seeded_defaults above). If this rule was already
+            # seeded in an earlier init_db() call, it's already correctly
+            # attached to that category's id — a rename doesn't move
+            # existing rules — and unaffected by this rename; if not,
+            # there's no default category left to attach a NEW seeded rule
+            # to, so it's skipped rather than crashing every app start.
+            continue
         conn.execute(
             "INSERT OR IGNORE INTO category_rules "
             "(keyword, category_id, match_count, correction_count, is_seeded, created_at) "
@@ -810,24 +854,21 @@ def init_db(db_path):
     # PUT /api/rules/<id> (see update_rule), so a generic version would
     # silently undo any manual re-categorization Kevin makes through
     # "Regeln verwalten" on every restart.
-    kreditkarten_ausgleich_id = conn.execute(
-        "SELECT id FROM categories WHERE name = 'Kreditkarten-Ausgleich'"
-    ).fetchone()["id"]
-    sonstiges_id = conn.execute(
-        "SELECT id FROM categories WHERE name = 'Sonstiges'"
-    ).fetchone()["id"]
-    conn.execute(
-        "UPDATE category_rules SET category_id = ? "
-        "WHERE keyword = 'ihre zahlung' AND category_id = ?",
-        (kreditkarten_ausgleich_id, sonstiges_id),
-    )
-    # Same one-off retarget for "saldovortrag", seeded under Sonstiges before
-    # the credit-card-settlement exclusion existed for it too.
-    conn.execute(
-        "UPDATE category_rules SET category_id = ? "
-        "WHERE keyword = 'saldovortrag' AND category_id = ?",
-        (kreditkarten_ausgleich_id, sonstiges_id),
-    )
+    kreditkarten_ausgleich_id = _category_id_by_name(conn, "Kreditkarten-Ausgleich")
+    sonstiges_id = _category_id_by_name(conn, "Sonstiges")
+    if kreditkarten_ausgleich_id is not None and sonstiges_id is not None:
+        conn.execute(
+            "UPDATE category_rules SET category_id = ? "
+            "WHERE keyword = 'ihre zahlung' AND category_id = ?",
+            (kreditkarten_ausgleich_id, sonstiges_id),
+        )
+        # Same one-off retarget for "saldovortrag", seeded under Sonstiges
+        # before the credit-card-settlement exclusion existed for it too.
+        conn.execute(
+            "UPDATE category_rules SET category_id = ? "
+            "WHERE keyword = 'saldovortrag' AND category_id = ?",
+            (kreditkarten_ausgleich_id, sonstiges_id),
+        )
     # Fourth pass: introduced Auto (split out of Transport/Sonstiges), Hobby
     # (split out of Freizeit/Abos), and Steuern (split out of Sonstiges) —
     # same "already seeded under an old category" situation as ihre
@@ -851,13 +892,14 @@ def init_db(db_path):
         ("steuerbezug", "Sonstiges"),
     ]
     for keyword, old_category_name in _fourth_pass_retargets:
-        old_category_id = conn.execute(
-            "SELECT id FROM categories WHERE name = ?", (old_category_name,)
-        ).fetchone()["id"]
-        new_category_id = conn.execute(
-            "SELECT id FROM categories WHERE name = ?",
-            (_keyword_to_new_category[keyword],),
-        ).fetchone()["id"]
+        old_category_id = _category_id_by_name(conn, old_category_name)
+        new_category_id = _category_id_by_name(conn, _keyword_to_new_category[keyword])
+        if old_category_id is None or new_category_id is None:
+            # Either category has been renamed/deleted since — this
+            # one-off migration either already ran successfully in the
+            # past (nothing left to retarget) or has no sensible category
+            # left to retarget to/from; skip rather than crash.
+            continue
         conn.execute(
             "UPDATE category_rules SET category_id = ? "
             "WHERE keyword = ? AND category_id = ?",
@@ -872,28 +914,25 @@ def init_db(db_path):
     # manually_corrected = 0 guard: never override a deliberate manual
     # re-categorization Kevin already made away from Abos, same reasoning as
     # every other retarget in this function not touching manual corrections.
-    abos_id = conn.execute(
-        "SELECT id FROM categories WHERE name = 'Abos'"
-    ).fetchone()["id"]
-    versteckt_id = conn.execute(
-        "SELECT id FROM categories WHERE name = 'Versteckt'"
-    ).fetchone()["id"]
-    conn.execute(
-        "UPDATE category_rules SET category_id = ? "
-        "WHERE keyword = 'onlyfans' AND category_id = ?",
-        (versteckt_id, abos_id),
-    )
-    conn.execute(
-        "UPDATE transactions SET category_id = ? "
-        "WHERE category_id = ? AND manually_corrected = 0 "
-        "AND LOWER(description) LIKE '%onlyfans%'",
-        (versteckt_id, abos_id),
-    )
-    conn.execute(
-        "UPDATE pending_transactions SET category_id = ? "
-        "WHERE category_id = ? AND LOWER(description) LIKE '%onlyfans%'",
-        (versteckt_id, abos_id),
-    )
+    abos_id = _category_id_by_name(conn, "Abos")
+    versteckt_id = _category_id_by_name(conn, "Versteckt")
+    if abos_id is not None and versteckt_id is not None:
+        conn.execute(
+            "UPDATE category_rules SET category_id = ? "
+            "WHERE keyword = 'onlyfans' AND category_id = ?",
+            (versteckt_id, abos_id),
+        )
+        conn.execute(
+            "UPDATE transactions SET category_id = ? "
+            "WHERE category_id = ? AND manually_corrected = 0 "
+            "AND LOWER(description) LIKE '%onlyfans%'",
+            (versteckt_id, abos_id),
+        )
+        conn.execute(
+            "UPDATE pending_transactions SET category_id = ? "
+            "WHERE category_id = ? AND LOWER(description) LIKE '%onlyfans%'",
+            (versteckt_id, abos_id),
+        )
     _backfill_accounts(conn)
     _fix_location_poisoned_rules(conn)
     conn.commit()
@@ -1030,6 +1069,7 @@ def reset_db(db_path):
     conn.execute("DELETE FROM category_rules")
     conn.execute("DELETE FROM budgets")
     conn.execute("DELETE FROM categories")
+    conn.execute("DELETE FROM seeded_defaults")
     conn.execute("DELETE FROM accounts")
     conn.execute("DELETE FROM settings")
     conn.commit()
