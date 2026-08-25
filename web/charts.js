@@ -146,8 +146,21 @@ function renderChart(container, config) {
     return series.filter((s) => state.visibility[s.key] !== false);
   }
 
+  // _drawBrush registers its drag-handling mousemove/mouseup listeners on
+  // `window` (so dragging still tracks the cursor once it leaves the brush
+  // element) — those must be explicitly torn down on every redraw, since
+  // removing the brush's DOM node (chartHost.innerHTML = "") does NOT
+  // detach a window-level listener. Without this, every zoom/legend-toggle
+  // interaction (each calls draw() again) piled up one more permanent
+  // window listener that outlives its own now-detached chart.
+  let brushAbort = null;
+
   function draw() {
     chartHost.innerHTML = "";
+    if (brushAbort) {
+      brushAbort.abort();
+      brushAbort = null;
+    }
     const [lo, hi] = state.zoomRange;
     const visibleData = data.slice(lo, hi);
 
@@ -159,7 +172,8 @@ function renderChart(container, config) {
         forecastFromIndex: forecastFromIndex === null ? null : forecastFromIndex - lo,
       }));
       if (zoomable && data.length > 4) {
-        chartHost.appendChild(_drawBrush(data, series, { width, formatX }, (newRange) => {
+        brushAbort = new AbortController();
+        chartHost.appendChild(_drawBrush(data, series, { width, formatX, signal: brushAbort.signal }, (newRange) => {
           state.zoomRange = newRange;
           draw();
         }));
@@ -178,6 +192,7 @@ function renderChart(container, config) {
 
   return {
     destroy() {
+      if (brushAbort) brushAbort.abort();
       container.innerHTML = "";
     },
     setSeriesVisible(key, visible) {
@@ -434,7 +449,7 @@ function _drawPie(data, series, opts) {
 // ---------- brush / zoom selector ----------
 
 function _drawBrush(data, series, opts, onChange) {
-  const { width, formatX } = opts;
+  const { width, formatX, signal } = opts;
   const innerW = width - CHART_PADDING.left - CHART_PADDING.right;
   const key = series[0] ? series[0].key : null;
   const values = key ? data.map((d) => d[key] || 0) : data.map(() => 0);
@@ -486,7 +501,13 @@ function _drawBrush(data, series, opts, onChange) {
       const scale = width / rect.width;
       selLeft = selRight = (event.clientX - rect.left) * scale - CHART_PADDING.left;
     }
-  });
+  }, { signal });
+  // Attached to `window` (not `svg`) so dragging keeps tracking the cursor
+  // even once it leaves the brush element — `signal` (an AbortController
+  // owned by the caller, aborted on every redraw/teardown) is what
+  // actually removes these again; window-level listeners never get
+  // implicitly cleaned up just because the element that created them was
+  // removed from the DOM.
   window.addEventListener("mousemove", (event) => {
     if (!dragging) return;
     const rect = svg.getBoundingClientRect();
@@ -496,18 +517,18 @@ function _drawBrush(data, series, opts, onChange) {
     else if (dragging === "right") selRight = Math.max(px, selLeft + 8);
     else selRight = px;
     updateSelection();
-  });
+  }, { signal });
   window.addEventListener("mouseup", () => {
     if (!dragging) return;
     dragging = null;
     const from = Math.max(0, indexForX(selLeft));
     const to = Math.min(data.length, indexForX(selRight) + 1);
     if (to - from >= 2) onChange([from, to]);
-  });
+  }, { signal });
   wrap.querySelector(".chart-brush-reset").addEventListener("click", () => {
     selLeft = 0; selRight = innerW; updateSelection();
     onChange([0, data.length]);
-  });
+  }, { signal });
 
   return wrap;
 }

@@ -54,6 +54,24 @@ function isoDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
+// isoDate() above is UTC-based (toISOString()) — correct for the many
+// dates in this file built with explicit UTC arithmetic (Date.UTC(),
+// setUTCDate(), ...), where the whole point is consistent UTC-space
+// calendar math. It's the WRONG choice for a Date built from `new Date()`
+// (the current local wall-clock instant) plus LOCAL setters (setDate(),
+// setMonth(), ...), as computeWindow() below does: for roughly the first
+// 1-2 hours after local midnight in Switzerland (UTC+1/+2), UTC is still
+// on the previous calendar day, so isoDate(new Date()) silently returns
+// yesterday's date — computeWindow()'s default "today" window would then
+// exclude today's own transactions. Use this instead for any Date
+// constructed via local getters/setters.
+function isoDateLocal(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 // ---------- period helpers (mirror server/app.py's _PERIOD_KEY_FORMATTERS) ----------
 
 function isoWeekKey(dateStr) {
@@ -140,23 +158,82 @@ function computeWindow(granularity) {
   else if (granularity === "quarter") { start.setMonth(start.getMonth() - 3 * 7); start.setDate(1); }
   else if (granularity === "year") { start.setFullYear(start.getFullYear() - 5); start.setMonth(0); start.setDate(1); }
   else { start.setMonth(start.getMonth() - 11); start.setDate(1); }
-  return { start: isoDate(start), end: isoDate(end) };
+  return { start: isoDateLocal(start), end: isoDateLocal(end) };
 }
 
-// Budgets are stored as a monthly figure (monthly_limit_cents), but the
-// budget-vs-actual widgets need to compare against whatever window
-// state.start..state.end currently covers — a fixed "always this calendar
-// month" comparison (an earlier version of this) never changed when the
-// toolbar's own period picker did, which read as "the numbers don't
-// update". Scaling the monthly limit by the selected window's length
-// (relative to an average 30.44-day month) keeps the comparison
-// meaningful for any period while still visibly responding to it: a
-// 3-month "Quartal" window compares against ~3x the monthly limit, a
-// single "Tag" window against ~1/30 of it, etc.
+// Budgets are stored as a monthly figure (monthly_limit_cents). The
+// budget-vs-actual widgets compare against the CURRENT single period at
+// the selected granularity (see currentPeriodRange/budgetComparisonRange
+// below) — e.g. under "Monat" that's the current calendar month so far,
+// under "Quartal" the current quarter so far — not the toolbar's whole
+// multi-period lookback window (state.start..state.end), which under the
+// default "Monat" granularity spans the last 12 months (see
+// computeWindow) to give the trend charts enough history. An earlier
+// version scaled the monthly limit by that WHOLE lookback window's length
+// instead of by one period — comparing e.g. 12 months of actual spend
+// against 12x the monthly budget. The ratio often still looked
+// superficially plausible, but the absolute figures shown ("Ist"/"Budget")
+// were inflated by the same ~12x, and the comparison got silently more
+// meaningless the wider the window (a "Jahr" selection inflated it ~60x),
+// making the budget warning/progress-bar feature effectively never
+// trigger under normal spending.
 const AVG_DAYS_PER_MONTH = 30.436875;
+
+// Ratio of one period at this granularity to one month — matches the
+// figure periodScaleFactor()/budgetComparisonRange() need to keep
+// monthly_limit_cents meaningful for whatever period is currently being
+// compared against.
+const GRANULARITY_MONTH_RATIO = {
+  day: 1 / AVG_DAYS_PER_MONTH,
+  week: 7 / AVG_DAYS_PER_MONTH,
+  month: 1,
+  quarter: 3,
+  year: 12,
+};
+
 function periodScaleFactor() {
-  const days = Math.round((new Date(state.end) - new Date(state.start)) / (24 * 3600 * 1000)) + 1;
-  return Math.max(days, 1) / AVG_DAYS_PER_MONTH;
+  if (state.granularity === "custom") {
+    // An explicitly user-chosen range — respecting its actual length here
+    // (rather than snapping to a fixed period) is the one case where
+    // scaling by the toolbar window itself is exactly what a user picking
+    // a custom range would expect.
+    const days = Math.round((new Date(state.end) - new Date(state.start)) / (24 * 3600 * 1000)) + 1;
+    return Math.max(days, 1) / AVG_DAYS_PER_MONTH;
+  }
+  return GRANULARITY_MONTH_RATIO[state.granularity] ?? 1;
+}
+
+// The current single period (so far) at a given granularity — e.g. "month"
+// -> the 1st of this calendar month through today, "quarter" -> the start
+// of this quarter through today. Always anchored to local "today", unlike
+// the toolbar's own state.start/state.end (which can be a wide multi-period
+// lookback under the day/week/month/quarter/year presets — see
+// computeWindow). Used only for the budget-vs-actual comparison, via
+// budgetComparisonRange() below.
+function currentPeriodRange(granularity) {
+  const now = new Date();
+  const start = new Date(now);
+  if (granularity === "week") {
+    const mondayOffset = (start.getDay() + 6) % 7; // Monday=0..Sunday=6
+    start.setDate(start.getDate() - mondayOffset);
+  } else if (granularity === "quarter") {
+    start.setMonth(Math.floor(start.getMonth() / 3) * 3, 1);
+  } else if (granularity === "year") {
+    start.setMonth(0, 1);
+  } else if (granularity !== "day") {
+    start.setDate(1); // "month" and any unrecognized granularity
+  }
+  return { start: isoDateLocal(start), end: isoDateLocal(now) };
+}
+
+// custom: the user's own explicit range (paired with periodScaleFactor()'s
+// day-count scaling above); every other granularity: the current period at
+// that granularity, freshly computed each call so it doesn't go stale.
+function budgetComparisonRange() {
+  if (state.granularity === "custom") {
+    return { start: state.start, end: state.end };
+  }
+  return currentPeriodRange(state.granularity);
 }
 
 function computePreviousWindow(start, end) {
@@ -207,6 +284,24 @@ function previousPeriodKeyFor(periodKey, granularity) {
   const shiftMs = spanMs + 24 * 3600 * 1000;
   const shifted = new Date(new Date(start).getTime() - shiftMs);
   return periodKeyFor(isoDate(shifted), granularity);
+}
+
+// Every chart widget is rebuilt from scratch on each renderAllWidgets()
+// call (filter/period change, layout reorder, ...), which wipes the grid's
+// DOM via innerHTML — but renderChart()'s returned destroy() was never
+// being called on the charts that DOM wipe just discarded. Harmless for
+// most charts, but the zoom brush (see charts.js's _drawBrush) registers
+// its drag-handling listeners on `window`, which a DOM removal alone never
+// detaches — every re-render permanently leaked one more pair of
+// window-level mousemove/mouseup listeners. trackedRenderChart() is a
+// drop-in wrapper for renderChart() that remembers every instance it
+// creates so renderAllWidgets() can destroy() them all first.
+let activeCharts = [];
+
+function trackedRenderChart(container, config) {
+  const instance = renderChart(container, config);
+  activeCharts.push(instance);
+  return instance;
 }
 
 // ---------- state ----------
@@ -326,14 +421,17 @@ function renderKpiWidget(id, bodyEl) {
     if (state.budgets.length === 0) {
       bodyEl.innerHTML = `<p class="widget-kpi-value tabular">—</p>`;
     } else {
-      // state.summary — the same period-filtered data every other widget
-      // uses — with each monthly_limit_cents scaled to match the selected
-      // window (see periodScaleFactor), so this responds to the toolbar's
-      // period picker like everything else instead of silently staying
-      // fixed to the current calendar month.
+      // state.periodSummary — the current single period at the selected
+      // granularity (see budgetComparisonRange), NOT state.summary's often
+      // much wider multi-period toolbar window — with each
+      // monthly_limit_cents scaled to that one period's length (see
+      // periodScaleFactor), so this responds to the toolbar's granularity
+      // picker (switching to "Quartal" compares against the current
+      // quarter, etc.) without inflating both sides by however many
+      // periods the trend charts happen to be showing.
       const scale = periodScaleFactor();
       const spentByCategory = {};
-      s.by_category.forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
+      (state.periodSummary ? state.periodSummary.by_category : []).forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
       const remaining = state.budgets.reduce(
         (sum, b) => sum + (b.monthly_limit_cents * scale - (spentByCategory[b.category_name] || 0)), 0
       );
@@ -394,7 +492,7 @@ function renderIncomeExpenseChart(bodyEl) {
   const compareInfo = state.compare && state.prevSummary
     ? mergePreviousForCompareAbs(chartData)
     : { data: chartData, series: [] };
-  renderChart(bodyEl, {
+  trackedRenderChart(bodyEl, {
     type: "combo",
     data: compareInfo.data,
     series: [...series, ...compareInfo.series],
@@ -477,7 +575,7 @@ function renderCashflowChart(bodyEl) {
   }));
   const fullData = [...data, ...forecastPoints];
 
-  renderChart(bodyEl, {
+  trackedRenderChart(bodyEl, {
     type: "area",
     data: fullData,
     series: [{ key: "net", label: "Cashflow", color: "var(--series-1)" }],
@@ -502,7 +600,7 @@ function renderCategoryDonut(bodyEl) {
   // something close to its own width instead, capped so it doesn't dwarf
   // the "Top-Kategorien" widget next to it.
   const width = bodyEl.clientWidth || 600;
-  renderChart(bodyEl, {
+  trackedRenderChart(bodyEl, {
     type: "donut",
     data,
     width,
@@ -549,7 +647,7 @@ function renderTagBreakdownChart(bodyEl) {
   if (rows.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Noch keine getaggten Buchungen im gewählten Zeitraum.</p>'; return; }
   const sorted = [...rows].sort((a, b) => b.amount_cents - a.amount_cents);
   const data = sorted.map((t) => ({ x: t.tag, amount: t.amount_cents }));
-  renderChart(bodyEl, {
+  trackedRenderChart(bodyEl, {
     type: "bar",
     data,
     series: [{ key: "amount", label: "Ausgaben", color: "var(--series-4)" }],
@@ -570,21 +668,22 @@ function openTagDrilldown(tagName) {
 
 function renderBudgetActualChart(bodyEl) {
   if (state.budgets.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Noch keine Budgets festgelegt.</p>'; return; }
-  // state.summary (the same period-filtered data every other widget uses)
-  // with each monthly_limit_cents scaled to the selected window (see
-  // periodScaleFactor) — "Ist" is this window's actual spend, "Budget" is
-  // the proportional allowance for that same window, so both bars respond
-  // to the toolbar's period picker instead of "Budget" silently staying
-  // fixed to one calendar month regardless of what's selected.
+  // state.periodSummary (the current single period at the selected
+  // granularity — see budgetComparisonRange) with each monthly_limit_cents
+  // scaled to that one period's length (see periodScaleFactor) — "Ist" is
+  // this period's actual spend, "Budget" is the proportional allowance for
+  // that same period, so both bars respond to the toolbar's granularity
+  // picker instead of "Budget" silently staying fixed to one calendar
+  // month regardless of what's selected.
   const scale = periodScaleFactor();
   const spentByCategory = {};
-  (state.summary ? state.summary.by_category : []).forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
+  (state.periodSummary ? state.periodSummary.by_category : []).forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
   const data = state.budgets.map((b) => ({
     x: b.category_name,
     budget: Math.round(b.monthly_limit_cents * scale),
     actual: spentByCategory[b.category_name] || 0,
   }));
-  renderChart(bodyEl, {
+  trackedRenderChart(bodyEl, {
     type: "bar",
     data,
     series: [
@@ -640,7 +739,7 @@ function renderCategoryTrendChart(bodyEl) {
 
   if (series.length === 0) { bodyEl.innerHTML = '<p class="panel-empty">Keine Ausgaben im gewählten Zeitraum.</p>'; return; }
 
-  renderChart(bodyEl, {
+  trackedRenderChart(bodyEl, {
     type: "bar",
     data,
     series,
@@ -666,7 +765,7 @@ function renderSavingsRateChart(bodyEl) {
     x: r.x,
     rate: r.income > 0 ? Math.round(((r.income + r.expense) / r.income) * 10000) : 0,
   }));
-  renderChart(bodyEl, {
+  trackedRenderChart(bodyEl, {
     type: "line",
     data,
     series: [{ key: "rate", label: "Sparquote", color: "var(--series-2)" }],
@@ -684,7 +783,7 @@ function renderCumulativeChart(bodyEl) {
     running += r.net;
     return { x: r.x, cumulative: running };
   });
-  renderChart(bodyEl, {
+  trackedRenderChart(bodyEl, {
     type: "area",
     data,
     series: [{ key: "cumulative", label: "Kumulierter Cashflow", color: "var(--series-3)" }],
@@ -837,16 +936,17 @@ function renderCategoryMoversList(bodyEl) {
 // ---------- budgets management widget (custom, non-chart) ----------
 
 function renderBudgetsManageWidget(bodyEl) {
-  // state.summary (the same period-filtered data every other widget uses)
-  // with each monthly_limit_cents scaled to the selected window (see
-  // periodScaleFactor), so "spent / limit" and the progress bar respond to
-  // the toolbar's period picker instead of always comparing against one
-  // calendar month no matter what's selected. The edit input below always
+  // state.periodSummary (the current single period at the selected
+  // granularity — see budgetComparisonRange) with each monthly_limit_cents
+  // scaled to that one period's length (see periodScaleFactor), so
+  // "spent / limit" and the progress bar respond to the toolbar's
+  // granularity picker instead of always comparing against one calendar
+  // month no matter what's selected. The edit input below always
   // shows/saves the true monthly figure (that's what's actually stored) —
   // only the *comparison* shown here scales with the period.
   const scale = periodScaleFactor();
   const spentByCategory = {};
-  (state.summary ? state.summary.by_category : []).forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
+  (state.periodSummary ? state.periodSummary.by_category : []).forEach((c) => { spentByCategory[c.category] = c.amount_cents; });
 
   const rowsHtml = state.budgets.length === 0
     ? '<p class="panel-empty">Noch keine Budgets festgelegt. Füge unten eines hinzu.</p>'
@@ -1086,6 +1186,8 @@ function renderWidgetContent(id, body) {
 
 function renderAllWidgets() {
   const grid = document.getElementById("dashboard-grid");
+  activeCharts.forEach((chart) => chart.destroy());
+  activeCharts = [];
   grid.innerHTML = "";
   layout.order
     .filter((id) => !layout.hidden.includes(id))
@@ -1569,12 +1671,19 @@ async function loadData() {
     document.getElementById("filter-end").value = win.end;
   }
 
-  const [summary, transactions] = await Promise.all([
+  const periodRange = budgetComparisonRange();
+  const [summary, transactions, periodSummary] = await Promise.all([
     fetch(`/api/summary?${summaryParams(state.start, state.end)}`).then((r) => r.json()),
     fetch(`/api/transactions?${summaryParams(state.start, state.end)}`).then((r) => r.json()),
+    // Independent of state.start/state.end — see budgetComparisonRange()/
+    // periodScaleFactor() above: the budget-vs-actual widgets compare
+    // against the current single period at the selected granularity, not
+    // the (often much wider, multi-period) toolbar lookback window.
+    fetch(`/api/summary?${summaryParams(periodRange.start, periodRange.end)}`).then((r) => r.json()),
   ]);
   state.summary = summary;
   state.transactions = transactions;
+  state.periodSummary = periodSummary;
 
   if (state.compare) {
     const prevWin = computePreviousWindow(state.start, state.end);
