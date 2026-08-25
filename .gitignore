@@ -1,1 +1,9 @@
 .worktrees/
+venv/
+__pycache__/
+*.pyc
+data/*.db
+data/*.db.backup-*
+data/backups/
+statements/*
+!statements/.gitkeep

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <script>
+    (function () {
+      var theme = localStorage.getItem("theme");
+      if (theme === "light" || theme === "dark") {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budget Tracker — Einstellungen</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+  <nav class="sidebar" id="sidebar" data-active="einstellungen"></nav>
+  <div class="page">
+
+    <header class="app-header">
+      <p class="app-title">Einstellungen</p>
+    </header>
+
+    <!-- Kategorien -->
+    <section class="settings-section">
+      <div class="section-head">
+        <p class="section-title">Kategorien</p>
+      </div>
+      <div class="panel">
+        <div id="category-list" class="settings-list"></div>
+        <div class="settings-add-row">
+          <input type="text" id="new-category-name" placeholder="Neue Kategorie, z.B. Haustier">
+          <button id="add-category-btn" class="btn btn-primary" type="button">Kategorie hinzufügen</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Konten -->
+    <section class="settings-section">
+      <div class="section-head">
+        <p class="section-title">Konten</p>
+      </div>
+      <div class="panel">
+        <p class="settings-row-hint" style="margin: 0 0 0.9rem;">
+          Konten werden beim Import automatisch angelegt. Hier können sie umbenannt oder — falls
+          nicht mehr verwendet — entfernt werden.
+        </p>
+        <div id="account-list" class="settings-list"></div>
+      </div>
+    </section>
+
+    <!-- Tags -->
+    <section class="settings-section">
+      <div class="section-head">
+        <p class="section-title">Tags</p>
+      </div>
+      <div class="panel">
+        <div id="tag-list" class="settings-list"></div>
+        <div class="settings-add-row">
+          <input type="text" id="new-tag-name" placeholder="Neuer Tag, z.B. Urlaub">
+          <button id="add-tag-btn" class="btn btn-primary" type="button">Tag hinzufügen</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Automatische Kategorisierung -->
+    <section class="settings-section">
+      <div class="section-head">
+        <p class="section-title">Automatische Kategorisierung</p>
+      </div>
+      <div class="panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Automatische Kategorisierung</p>
+            <p class="settings-row-hint">Neue Buchungen werden beim Import automatisch anhand gelernter Regeln kategorisiert.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="auto-categorize-toggle">
+            <span class="switch-track"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Mindest-Konfidenz für automatische Übernahme</p>
+            <p class="settings-row-hint">Buchungen unterhalb dieses Werts müssen manuell geprüft werden.</p>
+          </div>
+          <div class="settings-slider-group">
+            <input type="range" id="confidence-slider" min="0.5" max="1" step="0.05">
+            <span id="confidence-value" class="settings-slider-value tabular">75%</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Gelernte Regeln</p>
+            <p class="settings-row-hint">Regeln einsehen, umlenken oder löschen.</p>
+          </div>
+          <a href="/regeln.html" class="btn btn-ghost">Regeln verwalten →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Datenverwaltung -->
+    <section class="settings-section">
+      <div class="section-head">
+        <p class="section-title">Datenverwaltung</p>
+      </div>
+      <div class="panel panel-danger">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Bestimmte Daten löschen</p>
+            <p class="settings-row-hint">Löscht nur Buchungen, die den unten gewählten Filtern entsprechen. Mindestens ein Filter ist erforderlich.</p>
+          </div>
+        </div>
+        <div class="settings-filter-grid">
+          <div class="field">
+            <label class="field-label" for="delete-start">Von</label>
+            <input id="delete-start" type="date">
+          </div>
+          <div class="field">
+            <label class="field-label" for="delete-end">Bis</label>
+            <input id="delete-end" type="date">
+          </div>
+          <div class="field">
+            <label class="field-label" for="delete-category">Kategorie</label>
+            <select id="delete-category"><option value="">Alle Kategorien</option></select>
+          </div>
+          <div class="field">
+            <label class="field-label" for="delete-source">Konto/Quelle</label>
+            <select id="delete-source"><option value="">Alle Konten</option></select>
+          </div>
+          <div class="field">
+            <label class="field-label" for="delete-type">Typ</label>
+            <select id="delete-type">
+              <option value="">Einnahmen &amp; Ausgaben</option>
+              <option value="income">Nur Einnahmen</option>
+              <option value="expense">Nur Ausgaben</option>
+            </select>
+          </div>
+        </div>
+        <label class="settings-checkbox-row">
+          <input type="checkbox" id="delete-filtered-backup" checked>
+          Backup vor dem Löschen erstellen
+        </label>
+        <div class="pending-actions">
+          <button id="delete-filtered-btn" class="btn btn-danger" type="button">Gefilterte Buchungen löschen</button>
+        </div>
+      </div>
+
+      <div class="panel panel-danger">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Alle importierten Buchungen löschen</p>
+            <p class="settings-row-hint">Entfernt alle Buchungen, offenen Prüfungen und Importe — zum wiederholten Testen des Imports. Kategorien, gelernte Regeln, Budgets und Einstellungen bleiben erhalten.</p>
+          </div>
+        </div>
+        <label class="settings-checkbox-row">
+          <input type="checkbox" id="reset-imports-backup" checked>
+          Backup vor dem Löschen erstellen
+        </label>
+        <div class="pending-actions">
+          <button id="reset-imports-btn" class="btn btn-danger" type="button">Alle importierten Buchungen löschen</button>
+        </div>
+      </div>
+
+      <div class="panel panel-danger">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Gesamte Datenbank löschen</p>
+            <p class="settings-row-hint">Entfernt alle Buchungen, Importe und gelernten Regeln unwiderruflich und lädt die Standardkategorien neu.</p>
+          </div>
+        </div>
+        <label class="settings-checkbox-row">
+          <input type="checkbox" id="reset-all-backup" checked>
+          Backup vor dem Löschen erstellen
+        </label>
+        <div class="pending-actions">
+          <button id="reset-all-btn" class="btn btn-danger" type="button">Gesamte Datenbank löschen</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Import & Export -->
+    <section class="settings-section">
+      <div class="section-head">
+        <p class="section-title">Import &amp; Export</p>
+      </div>
+      <div class="panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Daten exportieren</p>
+            <p class="settings-row-hint">Lädt alle Kategorien, Regeln, Buchungen und Budgets als JSON-Datei herunter.</p>
+          </div>
+          <a href="/api/export" class="btn btn-ghost" download>Export herunterladen</a>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Import &amp; Wiederherstellung</p>
+            <p class="settings-row-hint">Noch nicht verfügbar — geplante Erweiterung.</p>
+          </div>
+          <button class="btn btn-ghost" type="button" disabled>Bald verfügbar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Dashboard -->
+    <section class="settings-section">
+      <div class="section-head">
+        <p class="section-title">Dashboard</p>
+      </div>
+      <div class="panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Standardzeitraum</p>
+            <p class="settings-row-hint">Wird beim Öffnen des Dashboards automatisch als Filter vorausgewählt.</p>
+          </div>
+          <select id="default-date-range">
+            <option value="">Alle Buchungen</option>
+            <option value="7">Letzte 7 Tage</option>
+            <option value="30">Letzte 30 Tage</option>
+            <option value="90">Letzte 90 Tage</option>
+            <option value="365">Letzte 12 Monate</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Allgemein -->
+    <section class="settings-section">
+      <div class="section-head">
+        <p class="section-title">Allgemein</p>
+      </div>
+      <div class="panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Darstellung</p>
+            <p class="settings-row-hint">System folgt der Betriebssystem-Einstellung.</p>
+          </div>
+          <div id="theme-switcher" class="segmented">
+            <button type="button" class="segmented-option" data-theme-choice="system">System</button>
+            <button type="button" class="segmented-option" data-theme-choice="light">Hell</button>
+            <button type="button" class="segmented-option" data-theme-choice="dark">Dunkel</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <p class="settings-row-label">Datenbankinformationen</p>
+          </div>
+        </div>
+        <div id="db-info" class="kpi-grid settings-db-info"></div>
+      </div>
+    </section>
+
+  </div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script src="/einstellungen.js"></script>
+</body>
+</html>

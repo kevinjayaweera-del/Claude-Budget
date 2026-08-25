@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <script>
+    (function () {
+      var theme = localStorage.getItem("theme");
+      if (theme === "light" || theme === "dark") {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budget Tracker — Analyse</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+  <nav class="sidebar" id="sidebar" data-active="analyse"></nav>
+  <div class="page">
+
+    <header class="app-header">
+      <p class="app-title">Analyse</p>
+      <div class="widget-picker">
+        <button id="add-widget-btn" class="btn btn-ghost" type="button">+ Widget</button>
+        <div id="widget-picker-menu" class="widget-picker-menu hidden"></div>
+      </div>
+    </header>
+
+    <div class="dashboard-toolbar">
+      <div class="dashboard-toolbar-row">
+        <div class="field">
+          <label class="field-label">Zeitraum</label>
+          <div id="granularity-picker" class="segmented">
+            <button type="button" class="segmented-option" data-granularity="day">Tag</button>
+            <button type="button" class="segmented-option" data-granularity="week">Woche</button>
+            <button type="button" class="segmented-option active" data-granularity="month">Monat</button>
+            <button type="button" class="segmented-option" data-granularity="quarter">Quartal</button>
+            <button type="button" class="segmented-option" data-granularity="year">Jahr</button>
+            <button type="button" class="segmented-option" data-granularity="custom">Benutzerdefiniert</button>
+          </div>
+        </div>
+        <div class="field" id="custom-start-field">
+          <label class="field-label" for="filter-start">Von</label>
+          <input id="filter-start" type="date">
+        </div>
+        <div class="field" id="custom-end-field">
+          <label class="field-label" for="filter-end">Bis</label>
+          <input id="filter-end" type="date">
+        </div>
+        <label class="compare-toggle">
+          <input type="checkbox" id="compare-toggle">
+          Vorperiode vergleichen
+        </label>
+        <div class="toolbar-spacer"></div>
+        <button id="reset-filters-btn" class="btn btn-ghost hidden" type="button">Zurücksetzen</button>
+        <button id="filter-toggle-btn" class="btn btn-ghost filter-toggle active" type="button">
+          Filter
+          <span id="filter-toggle-badge" class="filter-badge hidden">0</span>
+          <span id="filter-toggle-caret" class="filter-toggle-caret">▴</span>
+        </button>
+      </div>
+      <div id="advanced-filters" class="dashboard-toolbar-row">
+        <div class="field">
+          <label class="field-label">Kategorie</label>
+          <div id="filter-category" class="multiselect"></div>
+        </div>
+        <div class="field">
+          <label class="field-label">Konto</label>
+          <div id="filter-account" class="multiselect"></div>
+        </div>
+        <div class="field">
+          <label class="field-label">Tag</label>
+          <div id="filter-tag" class="multiselect"></div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="filter-type">Typ</label>
+          <select id="filter-type">
+            <option value="">Einnahmen &amp; Ausgaben</option>
+            <option value="income">Nur Einnahmen</option>
+            <option value="expense">Nur Ausgaben</option>
+          </select>
+        </div>
+        <div class="field amount">
+          <label class="field-label" for="filter-min-amount">Betrag von</label>
+          <input id="filter-min-amount" type="number" step="0.01" placeholder="-500">
+        </div>
+        <div class="field amount">
+          <label class="field-label" for="filter-max-amount">Betrag bis</label>
+          <input id="filter-max-amount" type="number" step="0.01" placeholder="0">
+        </div>
+        <div class="field search">
+          <label class="field-label" for="filter-search">Suche</label>
+          <input id="filter-search" type="text" placeholder="z.B. Migros">
+        </div>
+        <div class="toolbar-spacer"></div>
+        <button id="apply-filters-btn" class="btn btn-primary" type="button">Anwenden</button>
+      </div>
+    </div>
+    <div id="active-filter-chips" class="filter-chips hidden"></div>
+
+    <div id="dashboard-grid" class="dashboard-grid"></div>
+
+  </div>
+  </div>
+
+  <div id="drilldown-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <p class="modal-title" id="drilldown-title">Details</p>
+        <button type="button" class="modal-close" id="drilldown-close">&times;</button>
+      </div>
+      <div class="modal-body" id="drilldown-body"></div>
+    </div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script src="/charts.js"></script>
+  <script src="/analyse.js"></script>
+</body>
+</html>

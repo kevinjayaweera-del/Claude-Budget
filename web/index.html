@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <script>
+    (function () {
+      var theme = localStorage.getItem("theme");
+      if (theme === "light" || theme === "dark") {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budget Tracker</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+  <nav class="sidebar" id="sidebar" data-active="dashboard"></nav>
+  <div class="page">
+
+    <header class="app-header">
+      <p class="app-title">Übersicht</p>
+    </header>
+
+    <section class="hero">
+      <div>
+        <p class="hero-balance-label">Saldo</p>
+        <p class="hero-balance"><span class="ccy">CHF</span><span id="total-balance">0.00</span></p>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-tile">
+          <p class="stat-label">Einnahmen</p>
+          <p class="stat-value credit tabular" id="total-income">0.00</p>
+        </div>
+        <div class="stat-tile">
+          <p class="stat-label">Ausgaben</p>
+          <p class="stat-value debit tabular" id="total-expense">0.00</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="toolbar">
+      <div class="field">
+        <label class="field-label" for="filter-start">Von</label>
+        <input id="filter-start" type="date">
+      </div>
+      <div class="field">
+        <label class="field-label" for="filter-end">Bis</label>
+        <input id="filter-end" type="date">
+      </div>
+      <div class="field">
+        <label class="field-label" for="filter-category">Kategorie</label>
+        <select id="filter-category"><option value="">Alle Kategorien</option></select>
+      </div>
+      <div class="field">
+        <label class="field-label" for="filter-source">Konto/Quelle</label>
+        <select id="filter-source"><option value="">Alle Konten</option></select>
+      </div>
+      <div class="field">
+        <label class="field-label" for="filter-type">Typ</label>
+        <select id="filter-type">
+          <option value="">Einnahmen &amp; Ausgaben</option>
+          <option value="income">Nur Einnahmen</option>
+          <option value="expense">Nur Ausgaben</option>
+        </select>
+      </div>
+      <div class="field amount">
+        <label class="field-label" for="filter-min-amount">Betrag von</label>
+        <input id="filter-min-amount" type="number" step="0.01" placeholder="-500">
+      </div>
+      <div class="field amount">
+        <label class="field-label" for="filter-max-amount">Betrag bis</label>
+        <input id="filter-max-amount" type="number" step="0.01" placeholder="0">
+      </div>
+      <div class="field search">
+        <label class="field-label" for="filter-search">Suche</label>
+        <input id="filter-search" type="text" placeholder="z.B. Migros">
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button id="apply-filters-btn" class="btn btn-ghost" type="button">Filtern</button>
+    </div>
+
+    <div class="panels">
+      <div class="panel">
+        <div class="section-head">
+          <p class="section-title">Ausgaben nach Kategorie</p>
+        </div>
+        <div id="category-bars" class="panel-body"></div>
+      </div>
+
+      <div class="panel">
+        <div class="section-head">
+          <p class="section-title">Einnahmen nach Kategorie</p>
+        </div>
+        <div id="category-bars-income" class="panel-body"></div>
+      </div>
+
+      <div class="panel panel-chart">
+        <div class="section-head">
+          <p class="section-title">Verlauf über Zeit</p>
+          <span class="section-note">Netto pro Monat</span>
+        </div>
+        <div id="trend-chart" class="panel-body"></div>
+      </div>
+    </div>
+
+    <div class="section-head">
+      <p class="section-title">Reise-Erkennung</p>
+      <span class="section-note">Findet Hinweise auf Reisen (Hotels, Flüge, Mietwagen) und taggt Buchungen im gewählten Zeitraum</span>
+    </div>
+    <div class="panel travel-panel">
+      <div class="travel-scan-row">
+        <button id="scan-travel-btn" class="btn btn-ghost" type="button">Reise-Kandidaten suchen</button>
+        <span id="travel-scan-status" class="travel-scan-status"></span>
+      </div>
+      <div id="travel-candidates-list" class="travel-candidates-list hidden"></div>
+
+      <div class="travel-tag-form">
+        <div class="field">
+          <label class="field-label" for="travel-tag-input">Tag</label>
+          <input id="travel-tag-input" type="text" list="travel-tag-options" placeholder="z.B. Ferien Berlin">
+          <datalist id="travel-tag-options"></datalist>
+        </div>
+        <div class="field">
+          <label class="field-label" for="travel-tag-start">Von</label>
+          <input id="travel-tag-start" type="date">
+        </div>
+        <div class="field">
+          <label class="field-label" for="travel-tag-end">Bis</label>
+          <input id="travel-tag-end" type="date">
+        </div>
+        <button id="apply-travel-tag-btn" class="btn btn-primary" type="button">Buchungen taggen</button>
+      </div>
+      <p id="travel-tag-result" class="travel-tag-result hidden"></p>
+    </div>
+
+    <div class="section-head">
+      <p class="section-title">Buchungen</p>
+    </div>
+    <div class="ledger">
+      <table id="transactions-table">
+        <thead>
+          <tr><th>Datum</th><th>Beschreibung</th><th>Kategorie</th><th>Quelle</th><th>Tags</th><th class="num">Betrag</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+  </div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script src="/charts.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

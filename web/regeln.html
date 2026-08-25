@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <script>
+    (function () {
+      var theme = localStorage.getItem("theme");
+      if (theme === "light" || theme === "dark") {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budget Tracker — Regeln</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+  <nav class="sidebar" id="sidebar" data-active="regeln"></nav>
+  <div class="page">
+
+    <header class="app-header">
+      <p class="app-title">Kategorisierungs-Regeln</p>
+    </header>
+
+    <p class="review-note">
+      Regeln entstehen automatisch, wenn du beim Bestätigen eines Imports
+      eine Kategorie zuweist oder korrigierst. Hier kannst du eine Regel
+      umlenken oder löschen — neue Regeln legst du nicht direkt an. Klicke
+      auf eine Kategorie, um ihre Regeln ein-/auszuklappen.
+    </p>
+
+    <p id="rules-empty-state" class="panel-empty hidden">
+      Noch keine Regeln vorhanden.
+    </p>
+
+    <div class="ledger">
+      <table id="rules-table">
+        <thead>
+          <tr>
+            <th>Keyword</th>
+            <th>Kategorie</th>
+            <th class="num">Konfidenz</th>
+            <th class="num">Treffer</th>
+            <th class="num">Korrekturen</th>
+            <th>Herkunft</th>
+            <th></th>
+          </tr>
+        </thead>
+      </table>
+    </div>
+
+  </div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script src="/regeln.js"></script>
+</body>
+</html>
