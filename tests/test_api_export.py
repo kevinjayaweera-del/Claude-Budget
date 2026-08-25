@@ -42,3 +42,29 @@ def test_export_contains_confirmed_transactions(client, tmp_path):
 
     assert len(data["transactions"]) == 1
     assert data["transactions"][0]["description"] == "Musterladen Zürich"
+
+
+def test_export_contains_accounts_tags_and_transaction_tags(client, tmp_path):
+    # Regression test for a low-severity bug found in the pre-release
+    # audit: the export omitted accounts and tags/transaction_tags
+    # entirely (unlike its deliberately-documented exclusion of
+    # pending_transactions/imported_files), so a restore built from it
+    # would silently lose every custom account name and tag assignment.
+    (tmp_path / "statements" / "ZKB" / "t.csv").parent.mkdir(parents=True)
+    (tmp_path / "statements" / "ZKB" / "t.csv").write_text(
+        "Datum;Buchungstext;Betrag;Währung\n01.03.2026;Musterladen Zürich;-45.90;CHF\n",
+        encoding="utf-8-sig",
+    )
+    client.post("/api/scan")
+    client.post("/api/import/confirm")
+    txn_id = client.get("/api/transactions").get_json()[0]["id"]
+    tag_id = client.post("/api/tags", json={"name": "Testtag"}).get_json()["id"]
+    client.post(f"/api/transactions/{txn_id}/tags", json={"tag_id": tag_id})
+
+    data = json.loads(client.get("/api/export").data)
+
+    assert len(data["accounts"]) == 1
+    assert data["accounts"][0]["source_key"] == "ZKB"
+    assert len(data["tags"]) == 1
+    assert data["tags"][0]["name"] == "Testtag"
+    assert data["transaction_tags"] == [{"transaction_id": txn_id, "tag_id": tag_id}]

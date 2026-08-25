@@ -418,6 +418,34 @@ def test_delete_transactions_by_date_range(client_with_data):
     assert remaining[0]["description"] == "Musterladen Zürich"
 
 
+def test_delete_transactions_by_tag_id_alone_is_accepted(client_with_data):
+    # Regression test for a medium-severity bug found in the pre-release
+    # audit: the "at least one filter required" safety check only
+    # recognized (start, end, category_id, source, type, q, min_amount,
+    # max_amount) — it rejected a request filtered ONLY by tag_id (or
+    # account_id) with a 400, even though _fetch_filtered_transactions
+    # (used by this same route to decide what to delete) supports both.
+    rows = client_with_data.get("/api/transactions").get_json()
+    musterladen = next(r for r in rows if r["description"] == "Musterladen Zürich")
+    tag_id = client_with_data.post("/api/tags", json={"name": "Testtag"}).get_json()["id"]
+    client_with_data.post(f"/api/transactions/{musterladen['id']}/tags", json={"tag_id": tag_id})
+
+    response = client_with_data.delete(f"/api/transactions?tag_id={tag_id}")
+
+    assert response.status_code == 200
+    assert response.get_json()["deleted"] == 1
+
+
+def test_delete_transactions_by_account_id_alone_is_accepted(client_with_data):
+    rows = client_with_data.get("/api/transactions").get_json()
+    account_id = rows[0]["account_id"]
+
+    response = client_with_data.delete(f"/api/transactions?account_id={account_id}")
+
+    assert response.status_code == 200
+    assert response.get_json()["deleted"] == len(rows)
+
+
 def test_delete_transactions_by_type(client_with_data):
     response = client_with_data.delete("/api/transactions?type=income")
 

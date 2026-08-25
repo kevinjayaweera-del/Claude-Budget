@@ -79,6 +79,39 @@ def test_hidden_transaction_excluded_from_summary_totals(client, tmp_path):
     assert "Versteckt" not in categories
 
 
+def test_pending_row_recategorized_to_hidden_stays_visible_in_review(client, tmp_path):
+    # Regression test for a critical bug found in the pre-release audit: a
+    # pending row manually corrected to a hidden category (e.g. "Versteckt")
+    # mid-review used to vanish from GET /api/pending — the row is still
+    # sitting in pending_transactions, but with no way to see, confirm, or
+    # delete it through the app. GET /api/pending is a working review queue,
+    # not a final ledger, so it must show everything still pending,
+    # regardless of category.
+    _write_csv(tmp_path, "a.csv", [("01.03.2026", "Mystery Merchant", "-19.99")])
+    client.post("/api/scan")
+    pending_id = client.get("/api/pending").get_json()[0]["id"]
+    versteckt_id = next(
+        c["id"] for c in client.get("/api/categories").get_json() if c["name"] == "Versteckt"
+    )
+
+    response = client.put(
+        f"/api/pending/{pending_id}",
+        json={"date": "2026-03-01", "description": "Mystery Merchant",
+              "amount_cents": -1999, "currency": "CHF", "category_id": versteckt_id},
+    )
+    assert response.status_code == 200
+
+    pending = client.get("/api/pending").get_json()
+    assert len(pending) == 1
+    assert pending[0]["id"] == pending_id
+    assert pending[0]["category_id"] == versteckt_id
+
+    # And it can still be confirmed from there, same as any other row.
+    confirm_response = client.post("/api/import/confirm", json={"ids": [pending_id]})
+    assert confirm_response.get_json() == {"imported": 1}
+    assert client.get("/api/pending").get_json() == []
+
+
 def test_hidden_transaction_still_counted_in_imported_files_total(client, tmp_path):
     # The whole point of imported-files: reconcile the parsed total against
     # the original PDF/CSV, which must still include hidden bookings —

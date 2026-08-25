@@ -127,3 +127,16 @@ def test_delete_unkategorisiert_is_forbidden(client):
     response = client.delete(f"/api/categories/{category_id}?confirm=true")
 
     assert response.status_code == 400
+
+
+def test_rename_unkategorisiert_is_forbidden(client):
+    # Regression test: import_service.scan_and_parse, confirm_import, and
+    # update_transaction_category all look this category up by this exact
+    # literal name at runtime (not just at seed time) — renaming it used to
+    # silently break every subsequent import scan.
+    category_id = _category_id(client, "Unkategorisiert")
+
+    response = client.put(f"/api/categories/{category_id}", json={"name": "Egal"})
+
+    assert response.status_code == 400
+    assert "Unkategorisiert" in {c["name"] for c in client.get("/api/categories").get_json()}

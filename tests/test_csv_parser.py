@@ -77,16 +77,25 @@ def test_parse_csv_handles_split_belastung_gutschrift_columns(tmp_path):
     ]
 
 
-def test_parse_csv_split_columns_raises_when_row_has_neither_debit_nor_credit(tmp_path):
+def test_parse_csv_split_columns_skips_row_with_neither_debit_nor_credit(tmp_path):
+    # A single malformed row (neither column filled) must not discard the
+    # rest of an otherwise well-formed file — it's reported via .errors and
+    # skipped, not raised.
     csv_path = tmp_path / "statement.csv"
     csv_path.write_text(
         '"Datum";"Buchungstext";"Belastung CHF";"Gutschrift CHF"\n'
-        '"07.07.2026";"Mystery row";"";""\n',
+        '"07.07.2026";"Mystery row";"";""\n'
+        '"08.07.2026";"Migros Zürich";"45.90";""\n',
         encoding="utf-8-sig",
     )
 
-    with pytest.raises(CsvParseError):
-        parse_csv(csv_path)
+    rows = parse_csv(csv_path)
+
+    assert rows == [
+        {"date": "2026-07-08", "description": "Migros Zürich", "amount_cents": -4590, "currency": "CHF"},
+    ]
+    assert len(rows.errors) == 1
+    assert rows.errors[0]["line"] == 2
 
 
 def test_parse_csv_skips_blank_date_detail_rows(tmp_path):
@@ -113,6 +122,47 @@ def test_parse_csv_skips_blank_date_detail_rows(tmp_path):
             "amount_cents": -92260,
             "currency": "CHF",
         },
+    ]
+
+
+def test_parse_csv_handles_german_style_thousands_dot_and_decimal_comma(tmp_path):
+    # Regression test for a critical bug found in the pre-release audit:
+    # "1.234,56" (dot as thousands separator, comma as decimal — the
+    # German/Austrian convention) was previously mis-parsed to ~1.23 CHF
+    # instead of 1234.56 CHF (~1000x too small), silently, with no error.
+    csv_path = tmp_path / "statement.csv"
+    csv_path.write_text(
+        "Datum;Buchungstext;Betrag;Währung\n"
+        "01.03.2026;Grosse Ueberweisung;-1.234,56;CHF\n",
+        encoding="utf-8-sig",
+    )
+
+    rows = parse_csv(csv_path)
+
+    assert rows == [
+        {"date": "2026-03-01", "description": "Grosse Ueberweisung", "amount_cents": -123456, "currency": "CHF"},
+    ]
+
+
+def test_parse_csv_still_handles_us_style_thousands_comma_and_decimal_dot(tmp_path):
+    # Regression guard alongside the German-style fix above: the existing
+    # "1,234.56"-style (comma thousands, dot decimal) amounts must keep
+    # working exactly as before.
+    # Semicolon-delimited on purpose: a comma-delimited file with a
+    # thousands-comma inside the amount field would need CSV quoting to
+    # disambiguate from the field delimiter, which is a separate concern
+    # from the number-format parsing this test targets.
+    csv_path = tmp_path / "statement.csv"
+    csv_path.write_text(
+        "Date;Description;Amount\n"
+        "2026-03-01;Big Transfer;-1,234.56\n",
+        encoding="utf-8-sig",
+    )
+
+    rows = parse_csv(csv_path)
+
+    assert rows == [
+        {"date": "2026-03-01", "description": "Big Transfer", "amount_cents": -123456, "currency": "CHF"},
     ]
 
 

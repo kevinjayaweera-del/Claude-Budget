@@ -142,6 +142,13 @@ def _split_multi_value(raw):
     is just a one-element list."""
     if not raw:
         return []
+    # Most callers are query-string values (already strings), but
+    # POST /api/transactions/tags/bulk passes a JSON request body straight
+    # through as filter_args — a caller sending category_id/account_id as a
+    # JSON number (the natural representation for an id) used to crash here
+    # with an unhandled AttributeError (int has no .split()).
+    if not isinstance(raw, str):
+        return [str(raw)]
     return [v for v in raw.split(",") if v]
 
 
@@ -302,6 +309,8 @@ def register_routes(app):
         return jsonify({
             "new_pending": result["created"],
             "duplicates_skipped": result["duplicates_skipped"],
+            "failed_files": result["failed_files"],
+            "row_errors": result["row_errors"],
         })
 
     @app.route("/api/pending", methods=["GET"])
@@ -311,11 +320,14 @@ def register_routes(app):
             "SELECT p.id, p.date, p.description, p.amount_cents, p.currency, "
             "p.category_id, c.name as category_name, p.source, p.category_confidence "
             "FROM pending_transactions p LEFT JOIN categories c ON p.category_id = c.id "
-            # Hidden-category rows never reach pending_transactions in the
-            # normal path (import_service.py routes them straight into
-            # transactions), but this guards against one surfacing here
-            # anyway — e.g. a manual re-categorization mid-review.
-            "WHERE COALESCE(c.is_hidden, 0) = 0 "
+            # Deliberately NOT filtering out is_hidden categories here, unlike
+            # every confirmed-transaction view: pending_transactions is a
+            # working review queue, not a final ledger. A row landing under a
+            # hidden category (e.g. corrected mid-review to "Versteckt")
+            # previously vanished from this list — gone from the review
+            # table, never confirmable or deletable through the app, with no
+            # recovery path. It stays visible here until the user explicitly
+            # confirms or deletes it.
             "ORDER BY p.date"
         ).fetchall()
         conn.close()
@@ -367,6 +379,11 @@ def register_routes(app):
 
         conn = get_db()
         try:
+            category = conn.execute(
+                "SELECT id FROM categories WHERE id = ?", (data["category_id"],)
+            ).fetchone()
+            if category is None:
+                return jsonify({"error": "category not found"}), 400
             cursor = conn.execute(
                 "UPDATE pending_transactions SET date=?, description=?, amount_cents=?, "
                 "currency=?, category_id=? WHERE id=?",
@@ -397,13 +414,26 @@ def register_routes(app):
         conn = get_db()
         data = request.get_json(silent=True)
         ids = data.get("ids") if data else None
-        if ids:
+        if ids is not None and not isinstance(ids, list):
+            conn.close()
+            return jsonify({"error": "ids must be a list"}), 400
+        # DELETE ... RETURNING atomically claims-and-removes the rows in one
+        # statement, rather than a separate SELECT followed later by a
+        # separate DELETE — the previous two-step version let two concurrent
+        # confirm requests both read the same still-present pending rows
+        # before either had deleted them, double-inserting into
+        # transactions. It also fixes an explicit empty ids list ("ids": [])
+        # being treated the same as "ids omitted" (Python: [] is falsy) and
+        # silently confirming every pending row instead of none.
+        if ids is None:
+            rows = conn.execute("DELETE FROM pending_transactions RETURNING *").fetchall()
+        elif ids:
             placeholders = ",".join("?" for _ in ids)
             rows = conn.execute(
-                f"SELECT * FROM pending_transactions WHERE id IN ({placeholders})", ids
+                f"DELETE FROM pending_transactions WHERE id IN ({placeholders}) RETURNING *", ids
             ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM pending_transactions").fetchall()
+            rows = []
         categorizer = RuleBasedCategorizer(conn)
         # "Unkategorisiert" is the "I don't know" placeholder, never a real
         # answer — confirming a row with it (whether left as the default or
@@ -450,11 +480,6 @@ def register_routes(app):
                 (row["date"], row["description"], row["amount_cents"], row["currency"],
                  final_category_id, row["source"], row["file_id"], row["account_id"], manually_corrected),
             )
-        if ids:
-            placeholders = ",".join("?" for _ in ids)
-            conn.execute(f"DELETE FROM pending_transactions WHERE id IN ({placeholders})", ids)
-        else:
-            conn.execute("DELETE FROM pending_transactions")
         conn.commit()
         imported = len(rows)
         conn.close()
@@ -499,6 +524,18 @@ def register_routes(app):
     def delete_rule(rule_id):
         conn = get_db()
         try:
+            # pending_transactions.suggested_rule_id references this table
+            # with no ON DELETE clause — deleting a rule still referenced by
+            # an unreviewed pending row used to crash with an unhandled
+            # foreign-key constraint error. Clear just the stale suggestion
+            # provenance first; the pending row itself and its current
+            # category_id are untouched, same as a freshly-imported row
+            # that never matched any rule.
+            conn.execute(
+                "UPDATE pending_transactions SET suggested_rule_id = NULL, "
+                "category_confidence = NULL WHERE suggested_rule_id = ?",
+                (rule_id,),
+            )
             cursor = conn.execute("DELETE FROM category_rules WHERE id = ?", (rule_id,))
             conn.commit()
             if cursor.rowcount == 0:
@@ -583,6 +620,18 @@ def register_routes(app):
                 return jsonify({"error": "confidence_threshold must be a number"}), 400
             if not (0.0 <= threshold <= 1.0):
                 return jsonify({"error": "confidence_threshold must be between 0 and 1"}), 400
+        if "default_date_range_days" in data and data["default_date_range_days"] not in (None, ""):
+            # Stored as a plain string and re-parsed via int() on every GET
+            # /api/settings (see _parse_setting_value) — an unvalidated
+            # non-numeric value here used to be accepted with 200 OK and
+            # then permanently break every subsequent GET /api/settings
+            # call with an unhandled 500, since "" is the only string
+            # _parse_setting_value treats as "no default" (see
+            # DEFAULT_SETTINGS in server/db.py).
+            try:
+                int(data["default_date_range_days"])
+            except (TypeError, ValueError):
+                return jsonify({"error": "default_date_range_days must be a whole number"}), 400
         conn = get_db()
         try:
             for key, value in data.items():
@@ -599,7 +648,10 @@ def register_routes(app):
     @app.route("/api/categories", methods=["GET"])
     def list_categories():
         conn = get_db()
-        rows = conn.execute("SELECT id, name FROM categories ORDER BY name").fetchall()
+        rows = conn.execute(
+            "SELECT id, name, COALESCE(is_hidden, 0) as is_hidden "
+            "FROM categories ORDER BY name"
+        ).fetchall()
         conn.close()
         return jsonify([dict(r) for r in rows])
 
@@ -628,9 +680,17 @@ def register_routes(app):
         name = str(data["name"]).strip()
         conn = get_db()
         try:
-            category = conn.execute("SELECT id FROM categories WHERE id = ?", (category_id,)).fetchone()
+            category = conn.execute("SELECT id, name FROM categories WHERE id = ?", (category_id,)).fetchone()
             if category is None:
                 return jsonify({"error": "category not found"}), 404
+            if category["name"] == "Unkategorisiert":
+                # Several code paths (import_service.scan_and_parse,
+                # confirm_import, update_transaction_category) look this
+                # category up by this exact literal name at runtime, not
+                # just at seed time — renaming it would silently break
+                # every subsequent import. Same protection DELETE already
+                # has, extended to rename.
+                return jsonify({"error": "Unkategorisiert cannot be renamed — it's the required fallback category"}), 400
             duplicate = conn.execute(
                 "SELECT id FROM categories WHERE name = ? AND id != ?", (name, category_id)
             ).fetchone()
@@ -862,6 +922,11 @@ def register_routes(app):
                 "SELECT t.id, t.date, t.description, t.amount_cents, "
                 "c.name AS category_name "
                 "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id "
+                # Consistent with every other data endpoint
+                # (_fetch_filtered_transactions) — a hidden-category
+                # transaction (e.g. "Versteckt") must not surface here
+                # either.
+                "WHERE COALESCE(c.is_hidden, 0) = 0 "
                 "ORDER BY t.date"
             ).fetchall()
         finally:
@@ -978,11 +1043,15 @@ def register_routes(app):
         # already supports — deliberately requires at least one to be set,
         # so an accidental unfiltered call can't silently wipe everything
         # (use /api/database/reset for that, a separate, explicit action).
-        filter_keys = ("start", "end", "category_id", "source", "type", "q", "min_amount", "max_amount")
+        filter_keys = (
+            "start", "end", "category_id", "account_id", "tag_id",
+            "source", "type", "q", "min_amount", "max_amount",
+        )
         if not any(request.args.get(key) for key in filter_keys):
             return jsonify({
-                "error": "at least one filter (start, end, category_id, source, type, q, "
-                         "min_amount, max_amount) must be specified — use /api/database/reset to wipe everything"
+                "error": "at least one filter (start, end, category_id, account_id, tag_id, "
+                         "source, type, q, min_amount, max_amount) must be specified — "
+                         "use /api/database/reset to wipe everything"
             }), 400
 
         conn = get_db()
@@ -1199,6 +1268,11 @@ def register_routes(app):
                     "SELECT * FROM transactions ORDER BY id"
                 )],
                 "budgets": [dict(r) for r in conn.execute("SELECT * FROM budgets ORDER BY id")],
+                "accounts": [dict(r) for r in conn.execute("SELECT * FROM accounts ORDER BY id")],
+                "tags": [dict(r) for r in conn.execute("SELECT * FROM tags ORDER BY id")],
+                "transaction_tags": [dict(r) for r in conn.execute(
+                    "SELECT * FROM transaction_tags ORDER BY transaction_id, tag_id"
+                )],
                 "settings": {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM settings")},
             }
         finally:

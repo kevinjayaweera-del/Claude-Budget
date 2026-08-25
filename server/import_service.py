@@ -56,6 +56,8 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
     statements_dir = Path(statements_dir)
     created = 0
     duplicates_skipped = 0
+    failed_files = []
+    row_errors = []
     categorizer = RuleBasedCategorizer(conn)
     auto_categorize = _auto_categorize_enabled(conn)
     uncategorized_id = conn.execute(
@@ -84,6 +86,8 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
 
         try:
             rows = parse_csv(path) if path.suffix.lower() == ".csv" else parse_pdf(path)
+            for row_error in getattr(rows, "errors", []):
+                row_errors.append({"filename": path.name, **row_error})
 
             source = (
                 path.parent.name
@@ -154,6 +158,7 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
         except Exception as exc:
             if not dry_run:
                 conn.rollback()
+            failed_files.append({"filename": path.name, "reason": str(exc)})
             print(f"Skipping {path.name}: {exc}", file=sys.stderr)
             continue
 
@@ -162,4 +167,9 @@ def scan_and_parse(conn, statements_dir, dry_run=False):
         created += file_created
         duplicates_skipped += file_duplicates
 
-    return {"created": created, "duplicates_skipped": duplicates_skipped}
+    return {
+        "created": created,
+        "duplicates_skipped": duplicates_skipped,
+        "failed_files": failed_files,
+        "row_errors": row_errors,
+    }

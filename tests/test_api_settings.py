@@ -86,3 +86,16 @@ def test_put_settings_with_unknown_key_returns_400(client):
     response = client.put("/api/settings", json={"not_a_real_setting": 1})
 
     assert response.status_code == 400
+
+
+def test_put_settings_rejects_non_numeric_default_date_range_days(client):
+    # Regression test for a medium-severity bug found in the pre-release
+    # audit: an unvalidated non-numeric value here used to be accepted with
+    # 200 OK, then permanently broke every subsequent GET /api/settings
+    # call with an unhandled 500 (int() raising inside
+    # _parse_setting_value).
+    response = client.put("/api/settings", json={"default_date_range_days": "not-a-number"})
+
+    assert response.status_code == 400
+    # And the setting must not have been written despite the later failure.
+    assert client.get("/api/settings").status_code == 200

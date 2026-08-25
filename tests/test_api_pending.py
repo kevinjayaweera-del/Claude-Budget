@@ -43,7 +43,7 @@ def test_scan_endpoint_returns_new_pending_count(client, tmp_path):
     response = client.post("/api/scan")
 
     assert response.status_code == 200
-    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0}
+    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0, "failed_files": [], "row_errors": []}
 
 
 def test_scan_endpoint_reports_duplicates_skipped_on_rescan_under_new_filename(client, tmp_path):
@@ -61,7 +61,7 @@ def test_scan_endpoint_reports_duplicates_skipped_on_rescan_under_new_filename(c
     )
     response = client.post("/api/scan")
 
-    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 1}
+    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 1, "failed_files": [], "row_errors": []}
     assert len(client.get("/api/pending").get_json()) == 2
 
 
@@ -71,7 +71,7 @@ def test_scan_endpoint_dry_run_reports_counts_without_creating_pending_rows(clie
     response = client.post("/api/scan?dry_run=true")
 
     assert response.status_code == 200
-    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0}
+    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0, "failed_files": [], "row_errors": []}
     assert client.get("/api/pending").get_json() == []
 
 
@@ -81,7 +81,7 @@ def test_scan_endpoint_dry_run_then_real_scan_still_creates_pending_rows(client,
     client.post("/api/scan?dry_run=true")
     response = client.post("/api/scan")
 
-    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0}
+    assert response.get_json() == {"new_pending": 1, "duplicates_skipped": 0, "failed_files": [], "row_errors": []}
     assert len(client.get("/api/pending").get_json()) == 1
 
 
@@ -136,6 +136,25 @@ def test_update_pending_row_with_missing_field_returns_400(client, tmp_path):
         "amount_cents": -4590,
         "currency": "CHF",
         # category_id intentionally omitted
+    })
+
+    assert response.status_code == 400
+
+
+def test_update_pending_row_with_nonexistent_category_returns_400(client, tmp_path):
+    # Regression test for a medium-severity bug found in the pre-release
+    # audit: an invalid/stale category_id used to crash with an unhandled
+    # sqlite3.IntegrityError (500) instead of a clean 400.
+    _write_sample_csv(tmp_path)
+    client.post("/api/scan")
+    pending_id = client.get("/api/pending").get_json()[0]["id"]
+
+    response = client.put(f"/api/pending/{pending_id}", json={
+        "date": "2026-03-01",
+        "description": "Migros Zürich",
+        "amount_cents": -4590,
+        "currency": "CHF",
+        "category_id": 999999,
     })
 
     assert response.status_code == 400
@@ -249,6 +268,21 @@ def test_confirm_import_with_explicit_ids_only_imports_selected_rows(client, tmp
     remaining_pending = client.get("/api/pending").get_json()
     assert len(remaining_pending) == 1
     assert remaining_pending[0]["id"] == second_id
+
+
+def test_confirm_import_with_explicit_empty_ids_confirms_nothing(client, tmp_path):
+    # Regression test for a critical bug found in the pre-release audit:
+    # Python treats [] as falsy, so "ids": [] used to hit the same branch as
+    # ids being omitted entirely — silently confirming every pending row
+    # instead of none.
+    _write_two_row_csv(tmp_path)
+    client.post("/api/scan")
+
+    response = client.post("/api/import/confirm", json={"ids": []})
+
+    assert response.get_json() == {"imported": 0}
+    assert len(client.get("/api/pending").get_json()) == 2
+    assert client.get("/api/transactions").get_json() == []
 
 
 def _rule_stats(db_path):

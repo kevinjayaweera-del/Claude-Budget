@@ -735,6 +735,61 @@ def test_parse_pdf_resolves_collective_booking_into_individual_transactions(tmp_
     ]
 
 
+def test_parse_pdf_reports_error_when_collective_booking_short_of_promised_count(tmp_path):
+    # Regression test for a high-severity bug found in the pre-release
+    # audit: a collective booking's header promises a count of detail rows
+    # ("(3)"), but if only some of them can actually be resolved (e.g. a
+    # layout quirk), the shortfall was previously silent — the missing
+    # transactions just vanished with no trace. Now it must be reported via
+    # .errors, while the rows that WERE found are still returned.
+    pdf_path = tmp_path / "kontoauszug.pdf"
+    c = canvas.Canvas(str(pdf_path), pagesize=(950, 700))
+    c.setFont("Helvetica", 7)
+
+    header_y = 650
+    c.drawString(50, header_y, "Datum")
+    c.drawString(150, header_y, "Buchungstext")
+    c.drawString(550, header_y, "Belastung")
+    c.drawString(610, header_y, "CHF")
+    c.drawString(660, header_y, "Gutschrift")
+    c.drawString(720, header_y, "CHF")
+    c.drawString(780, header_y, "Valuta")
+    c.drawString(850, header_y, "Saldo")
+    c.drawString(900, header_y, "CHF")
+
+    # Header promises 3 detail rows, but only 1 is a real detail row (has
+    # a "CHF<amount>" token) — the collective booking summary line itself
+    # cuts off there because a normal, unrelated transaction follows.
+    row_y = 610
+    c.drawString(50, row_y, "26.06.2026")
+    c.drawString(150, row_y, "Belastungen Dauerauftrag (3) Auftrags-Nr.Z261428714356")
+    c.drawString(560, row_y, "922.60")
+
+    row_y = 590
+    c.drawString(150, row_y, "AMAG Leasing AG, Alte Steinhauserstrasse 12, 6330 Cham, CH CHF622.60")
+
+    row_y = 570
+    c.drawString(50, row_y, "27.06.2026")
+    c.drawString(150, row_y, "Coop Zuerich")
+    c.drawString(560, row_y, "12.00")
+
+    c.save()
+
+    rows = parse_pdf(pdf_path)
+
+    assert rows == [
+        {
+            "date": "2026-06-26",
+            "description": "AMAG Leasing AG, Alte Steinhauserstrasse 12, 6330 Cham, CH",
+            "amount_cents": -62260,
+            "currency": "CHF",
+        },
+        {"date": "2026-06-27", "description": "Coop Zuerich", "amount_cents": -1200, "currency": "CHF"},
+    ]
+    assert len(rows.errors) == 1
+    assert "3" in rows.errors[0]["reason"] and "1" in rows.errors[0]["reason"]
+
+
 def test_parse_pdf_resolves_collective_booking_across_a_page_break(tmp_path):
     # Real-world edge case: the collective-booking header lands near the
     # bottom of a page, so its detail rows continue on the next page, after

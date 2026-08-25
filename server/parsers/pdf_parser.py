@@ -5,6 +5,8 @@ from decimal import Decimal
 import pdfplumber
 import pypdf
 
+from server.parsers import ParsedRows
+
 # Legacy single-amount-column heuristic (line-based). Used as a fallback for
 # PDF layouts that don't expose separate Belastung/Gutschrift (debit/credit)
 # columns — e.g. credit card statements with one signed amount per line.
@@ -303,8 +305,12 @@ def _open_pdf(file_path):
         return pdfplumber.open(_decrypt_pdf_bytes(file_path))
 
 
+def _row_text(row):
+    return " ".join(w["text"] for w in row) if row else ""
+
+
 def parse_pdf(file_path):
-    rows = []
+    rows = ParsedRows()
     columns = None
     statement_period = None
     column_rows = []
@@ -331,18 +337,43 @@ def parse_pdf(file_path):
             else:
                 text = page.extract_text() or ""
                 for line in text.split("\n"):
-                    parsed = _parse_line(line)
+                    try:
+                        parsed = _parse_line(line)
+                    except Exception as exc:
+                        # A single unparseable line (e.g. an amount/date
+                        # shape the regexes match but Decimal() rejects)
+                        # must not lose every other line already read from
+                        # this page/file — skip and report just this one.
+                        rows.errors.append({"line": line, "reason": str(exc)})
+                        continue
                     if parsed:
                         rows.append(parsed)
 
     i = 0
     while i < len(column_rows):
         row = column_rows[i]
-        batch = _match_batch_header(row)
+        try:
+            batch = _match_batch_header(row)
+        except Exception as exc:
+            rows.errors.append({"row": _row_text(row), "reason": str(exc)})
+            i += 1
+            continue
         header_date = row[0]["text"] if row and WORD_DATE_RE.match(row[0]["text"]) else None
         if batch is not None and header_date is not None:
             is_debit, count = batch
-            date_iso = _to_iso_date(header_date, statement_period)
+            try:
+                date_iso = _to_iso_date(header_date, statement_period)
+            except Exception as exc:
+                # Can't determine this summary line's own date (e.g. a
+                # year-less date and no recognizable statement issue-date
+                # line) — skip just this collective booking rather than
+                # losing every row parsed from the rest of the file.
+                rows.errors.append({
+                    "row": _row_text(row),
+                    "reason": f"Datum der Sammelbuchung konnte nicht bestimmt werden: {exc}",
+                })
+                i += 1
+                continue
             j = i + 1
             found = 0
             while j < len(column_rows) and found < count:
@@ -352,15 +383,35 @@ def parse_pdf(file_path):
                     # summary line) before finding all `count` detail rows —
                     # stop rather than misreading unrelated content as one.
                     break
-                detail = _parse_batch_detail_row(candidate, date_iso, is_debit)
+                try:
+                    detail = _parse_batch_detail_row(candidate, date_iso, is_debit)
+                except Exception as exc:
+                    rows.errors.append({"row": _row_text(candidate), "reason": str(exc)})
+                    detail = None
                 if detail:
                     rows.append(detail)
                     found += 1
                 j += 1
+            if found < count:
+                # The summary line promised `count` detail rows but fewer
+                # were actually resolved (e.g. a layout/page-break quirk) —
+                # the missing ones are real transactions that would
+                # otherwise vanish with no trace at all.
+                rows.errors.append({
+                    "row": _row_text(row),
+                    "reason": (
+                        f"Sammelbuchung kündigt {count} Einzelbuchungen an, "
+                        f"nur {found} konnten zugeordnet werden."
+                    ),
+                })
             i = j
             continue
 
-        parsed = _parse_columned_row(row, columns, statement_period)
+        try:
+            parsed = _parse_columned_row(row, columns, statement_period)
+        except Exception as exc:
+            rows.errors.append({"row": _row_text(row), "reason": str(exc)})
+            parsed = None
         if parsed:
             rows.append(parsed)
         i += 1

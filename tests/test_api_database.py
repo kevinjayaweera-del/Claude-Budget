@@ -47,7 +47,7 @@ def test_reset_database_allows_rescanning_previously_imported_file(client, tmp_p
     client.post("/api/database/reset")
     result = client.post("/api/scan").get_json()
 
-    assert result == {"new_pending": 1, "duplicates_skipped": 0}
+    assert result == {"new_pending": 1, "duplicates_skipped": 0, "failed_files": [], "row_errors": []}
 
 
 def test_reset_database_with_backup_creates_backup_file(client):
@@ -82,7 +82,7 @@ def test_reset_imports_allows_rescanning_previously_imported_file(client, tmp_pa
     client.post("/api/database/reset-imports")
     result = client.post("/api/scan").get_json()
 
-    assert result == {"new_pending": 1, "duplicates_skipped": 0}
+    assert result == {"new_pending": 1, "duplicates_skipped": 0, "failed_files": [], "row_errors": []}
 
 
 def test_reset_imports_keeps_learned_rules(client, tmp_path):

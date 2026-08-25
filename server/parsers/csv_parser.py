@@ -1,6 +1,8 @@
 import csv
 from datetime import datetime
 
+from server.parsers import ParsedRows
+
 DATE_COLUMNS = ["datum", "buchungsdatum", "date", "buchungstag"]
 AMOUNT_COLUMNS = ["betrag", "amount", "umsatz"]
 DEBIT_COLUMNS = ["belastung", "belastung chf"]
@@ -35,7 +37,20 @@ def _parse_date(value):
 
 def _parse_amount_cents(value):
     value = value.strip().replace("'", "").replace(" ", "")
-    if value.count(",") == 1 and value.count(".") == 0:
+    if "," in value and "." in value:
+        # Both separators present: whichever one appears LAST is the
+        # decimal separator, the other is a thousands separator to strip.
+        # Handles both "1,234.56"-style (US/international) and
+        # "1.234,56"-style (German/Austrian) amounts in the same code path
+        # — previously only the first form was handled correctly; the
+        # second silently produced a value ~1000x too small (comma
+        # stripped, dot left in place as if it were already the decimal
+        # point) with no error raised.
+        if value.rfind(",") > value.rfind("."):
+            value = value.replace(".", "").replace(",", ".")
+        else:
+            value = value.replace(",", "")
+    elif value.count(",") == 1:
         value = value.replace(",", ".")
     else:
         value = value.replace(",", "")
@@ -76,8 +91,11 @@ def parse_csv(file_path):
                 f"Konnte Spalten nicht erkennen. Gefunden: {reader.fieldnames}"
             )
 
-        rows = []
-        for row in reader:
+        rows = ParsedRows()
+        # line_number starts at 2: DictReader's first data row is line 2 of
+        # the file (line 1 is the header), matching what a user would see if
+        # they opened the CSV in a text editor/Excel.
+        for line_number, row in enumerate(reader, start=2):
             if not row[date_col].strip():
                 # A combined transaction (e.g. "Belastungen Dauerauftrag (2)")
                 # can be followed by recipient-breakdown rows that carry no
@@ -85,27 +103,34 @@ def parse_csv(file_path):
                 # not a separate booking. Skip rather than treating it as a
                 # malformed transaction, so the rest of the file still imports.
                 continue
-            if use_split_columns:
-                debit = row.get(debit_col, "").strip()
-                credit = row.get(credit_col, "").strip()
-                if debit:
-                    amount_cents = -abs(_parse_amount_cents(debit))
-                elif credit:
-                    amount_cents = abs(_parse_amount_cents(credit))
+            try:
+                if use_split_columns:
+                    debit = row.get(debit_col, "").strip()
+                    credit = row.get(credit_col, "").strip()
+                    if debit:
+                        amount_cents = -abs(_parse_amount_cents(debit))
+                    elif credit:
+                        amount_cents = abs(_parse_amount_cents(credit))
+                    else:
+                        raise CsvParseError(
+                            f"Weder Belastung noch Gutschrift gefüllt in Zeile: {row}"
+                        )
                 else:
-                    raise CsvParseError(
-                        f"Weder Belastung noch Gutschrift gefüllt in Zeile: {row}"
-                    )
-            else:
-                amount_cents = _parse_amount_cents(row[amount_col])
+                    amount_cents = _parse_amount_cents(row[amount_col])
+                date = _parse_date(row[date_col])
+            except CsvParseError as exc:
+                # A single malformed row (bad date/amount format, or neither
+                # Belastung nor Gutschrift filled) must not discard every
+                # other, otherwise well-formed row in the same file — only
+                # this row is skipped and reported, the rest still imports.
+                rows.errors.append({"line": line_number, "reason": str(exc)})
+                continue
 
+            currency = (row.get(currency_col) or "").strip() if currency_col else ""
             rows.append({
-                "date": _parse_date(row[date_col]),
+                "date": date,
                 "description": row[desc_col].strip(),
                 "amount_cents": amount_cents,
-                "currency": (row.get(currency_col) or "").strip() if currency_col else "",
+                "currency": currency or "CHF",
             })
-        for row in rows:
-            if not row["currency"]:
-                row["currency"] = "CHF"
         return rows
